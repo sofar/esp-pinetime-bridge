@@ -1,0 +1,595 @@
+esphome:
+  name: pinetime-bridge
+  friendly_name: PineTime Bridge
+  platformio_options:
+    board_build.flash_mode: dio
+  on_boot:
+    - priority: 900
+      then:
+        # Reset touch and display via TCA9554 I/O expander using raw I2C
+        # TCA9554 at 0x20: register 0x01 = output port, register 0x03 = config (0=output)
+        - lambda: |-
+            ESP_LOGI("boot", "Resetting touch/display via I/O expander (raw I2C)...");
+            auto bus = id(i2c_bus);
+            uint8_t buf[2];
+            // Set pins 0,1,2 as output (register 0x03, clear bits 0-2)
+            buf[0] = 0x03; buf[1] = 0xF8;
+            bus->write(0x20, buf, 2, true);
+            // Pull pins 0,1,2 low (register 0x01)
+            buf[0] = 0x01; buf[1] = 0x00;
+            bus->write(0x20, buf, 2, true);
+        - delay: 200ms
+        - lambda: |-
+            auto bus = id(i2c_bus);
+            uint8_t buf[2];
+            // Set pins 0,1,2 high (register 0x01)
+            buf[0] = 0x01; buf[1] = 0x07;
+            bus->write(0x20, buf, 2, true);
+            ESP_LOGI("boot", "Reset sequence complete");
+        - delay: 100ms
+    - priority: 500
+      then:
+        - lambda: |-
+            // Restore paired watch address from NVS and save callback
+            uint64_t addr = id(paired_watch_addr);
+            if (addr != 0) {
+              ESP_LOGI("boot", "Restoring paired watch: 0x%012llX", addr);
+              id(pinetime_bridge_id)->set_paired_address(addr);
+            }
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_LWIP_MAX_SOCKETS: "16"
+
+psram:
+  mode: octal
+
+logger:
+  level: DEBUG
+  baud_rate: 115200
+
+api:
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "PineTime-Bridge"
+
+captive_portal:
+
+web_server:
+  port: 80
+  version: 3
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: PST8PDT,M3.2.0/2,M11.1.0/2
+    servers:
+      - 0.pool.ntp.org
+
+button:
+  - platform: restart
+    id: device_restart
+    name: "Device Restart"
+
+text_sensor:
+  - platform: version
+    id: device_version
+    name: "ESPHome Version"
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+  - platform: template
+    id: bridge_watch_firmware
+    name: "Watch Firmware"
+    icon: "mdi:cellphone-arrow-down"
+    update_interval: 30s
+    lambda: |-
+      auto fw = id(pinetime_bridge_id)->get_watch_firmware();
+      return fw.empty() ? std::string("Unknown") : fw;
+  - platform: template
+    id: bridge_watch_manufacturer
+    name: "Watch Manufacturer"
+    icon: "mdi:factory"
+    update_interval: 60s
+    lambda: |-
+      auto m = id(pinetime_bridge_id)->get_watch_manufacturer();
+      return m.empty() ? std::string("Unknown") : m;
+  - platform: template
+    id: bridge_watch_software
+    name: "Watch Software"
+    icon: "mdi:application"
+    update_interval: 60s
+    lambda: |-
+      auto s = id(pinetime_bridge_id)->get_watch_software();
+      return s.empty() ? std::string("Unknown") : s;
+  - platform: template
+    id: bridge_connected_mac
+    name: "Connected Watch"
+    update_interval: 30s
+    lambda: |-
+      auto *bridge = id(pinetime_bridge_id);
+      auto addr = bridge->parent()->get_address();
+      if (addr == 0 || addr == 0xAABBCCDDEEFF) return std::string("None");
+      char buf[18];
+      snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+        (uint8_t)(addr >> 40), (uint8_t)(addr >> 32), (uint8_t)(addr >> 24),
+        (uint8_t)(addr >> 16), (uint8_t)(addr >> 8), (uint8_t)(addr));
+      return std::string(buf);
+  - platform: template
+    id: bridge_watch_status
+    name: "Watch BLE Status"
+    icon: "mdi:bluetooth-connect"
+    update_interval: 30s
+    lambda: |-
+      auto *bridge = id(pinetime_bridge_id);
+      if (bridge->is_connected()) {
+        return std::string("Connected");
+      }
+      if (bridge->get_watch_battery() > 0) {
+        return std::string("Paired (disconnected)");
+      }
+      return std::string("Not paired");
+  - platform: template
+    id: bridge_last_sync
+    name: "Last Reminder Sync"
+    icon: "mdi:sync"
+    update_interval: 30s
+    lambda: |-
+      return id(pinetime_bridge_id)->get_last_sync_time();
+  - platform: template
+    id: bridge_server_status
+    name: "Server Status"
+    icon: "mdi:server-network"
+    update_interval: 30s
+    lambda: |-
+      return id(pinetime_bridge_id)->is_server_reachable() ? std::string("Reachable") : std::string("Unreachable");
+  - platform: template
+    id: bridge_next_reminder
+    name: "Next Reminder"
+    icon: "mdi:bell-ring"
+    update_interval: 30s
+    lambda: |-
+      auto *bridge = id(pinetime_bridge_id);
+      uint8_t h, m;
+      std::string msg;
+      if (bridge->get_next_reminder(h, m, msg)) {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "%02d:%02d - %s", h, m, msg.c_str());
+        return std::string(buf);
+      }
+      return std::string("None");
+
+sensor:
+  - platform: uptime
+    name: Uptime
+    id: device_uptime
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    unit_of_measurement: min
+    update_interval: 60s
+    filters:
+      - lambda: return x / 60;
+  - platform: template
+    id: watch_battery_sensor
+    name: "Watch Battery"
+    unit_of_measurement: "%"
+    device_class: battery
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: |-
+      return id(pinetime_bridge_id)->get_watch_battery();
+  - platform: template
+    id: watch_steps_sensor
+    name: "Watch Steps"
+    icon: "mdi:walk"
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: |-
+      return id(pinetime_bridge_id)->get_watch_steps();
+  - platform: template
+    id: reminder_count_sensor
+    name: "Reminder Count"
+    icon: "mdi:bell-badge"
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: |-
+      return id(pinetime_bridge_id)->get_reminder_count();
+  - platform: wifi_signal
+    name: WiFi Signal
+    id: device_wifi_signal
+    entity_category: diagnostic
+    update_interval: 60s
+
+binary_sensor:
+  - platform: status
+    id: device_status
+    name: "Status"
+
+# Bridge-specific settings (editable from ESPHome web UI, persisted to flash)
+text:
+  - platform: template
+    id: setting_api_url
+    name: "API Server URL"
+    optimistic: true
+    initial_value: !secret api_base_url
+    restore_value: true
+    mode: text
+    on_value:
+      then:
+        - lambda: |-
+            auto *bridge = id(pinetime_bridge_id);
+            bridge->set_api_base_url(x);
+  - platform: template
+    id: setting_user_id
+    name: "User ID"
+    optimistic: true
+    initial_value: !secret user_id
+    restore_value: true
+    mode: text
+    on_value:
+      then:
+        - lambda: |-
+            auto *bridge = id(pinetime_bridge_id);
+            bridge->set_user_id(x);
+  - platform: template
+    id: setting_bridge_id
+    name: "Bridge ID"
+    optimistic: true
+    initial_value: !secret bridge_id
+    restore_value: true
+    mode: text
+    on_value:
+      then:
+        - lambda: |-
+            auto *bridge = id(pinetime_bridge_id);
+            bridge->set_bridge_id(x);
+number:
+  - platform: template
+    id: setting_poll_interval
+    name: "Poll Interval (seconds)"
+    optimistic: true
+    initial_value: 60
+    restore_value: true
+    min_value: 10
+    max_value: 3600
+    step: 10
+    unit_of_measurement: "s"
+    on_value:
+      then:
+        - lambda: |-
+            auto *bridge = id(pinetime_bridge_id);
+            bridge->set_poll_interval((uint32_t)(x * 1000));
+
+# I2C bus (touch + IMU + RTC + power management)
+# Discovered devices:
+#   0x18 - IMU (accelerometer/gyroscope)
+#   0x20 - TCA9554 I/O expander (reset lines for display/touch)
+#   0x34 - AXP2101 power management
+#   0x38 - FT3168 touch (only appears after reset via TCA9554 pin 0)
+#   0x51 - PCF85063 RTC
+#   0x6B - ES8311 audio codec
+i2c:
+  id: i2c_bus
+  scl: GPIO14
+  sda: GPIO15
+  frequency: 400kHz
+  scan: false
+
+# I/O Expander (TCA9554 — resets display and touch controllers)
+pca9554:
+  - id: io_expander
+    address: 0x20
+    i2c_id: i2c_bus
+
+
+# Quad SPI bus (display)
+spi:
+  type: quad
+  clk_pin: GPIO11
+  data_pins: [GPIO4, GPIO5, GPIO6, GPIO7]
+
+# AMOLED display (SH8601 via QSPI)
+display:
+  - platform: mipi_spi
+    id: main_display
+    bus_mode: quad
+    cs_pin: GPIO12
+    dimensions:
+      width: 368
+      height: 448
+    model: WAVESHARE-ESP32-S3-TOUCH-AMOLED-1.75
+    brightness: 204  # 80% of 255
+
+# Touch screen (FT3168 / ft5x06 compatible)
+# Reset is handled via I/O expander pin 0 in on_boot
+touchscreen:
+  - platform: ft5x06
+    id: main_touch
+    display: main_display
+    address: 0x38
+    i2c_id: i2c_bus
+    interrupt_pin: GPIO21
+    on_touch:
+      - lambda: |-
+          // Wake display on touch
+          id(display_dimmed) = false;
+          id(display_last_touch) = millis();
+          auto disp = id(main_display);
+          disp->set_brightness(204);  // 80%
+
+# LVGL UI
+lvgl:
+  displays:
+    - main_display
+  touchscreens:
+    - main_touch
+  pages:
+    - id: status_page
+      bg_color: 0x000000
+      widgets:
+        # Title
+        - label:
+            align: TOP_MID
+            y: 12
+            text: "PineTime Bridge"
+            text_color: 0xFFFFFF
+            text_font: montserrat_18
+
+        # Next reminder section
+        - label:
+            id: lbl_next_title
+            x: 16
+            y: 52
+            text: "NEXT REMINDER"
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            id: lbl_next_time
+            x: 16
+            y: 70
+            text: "--:--"
+            text_color: 0xFFFFFF
+            text_font: montserrat_36
+        - label:
+            id: lbl_next_msg
+            x: 16
+            y: 116
+            text: "No reminders"
+            text_color: 0xCCCCCC
+            text_font: montserrat_14
+            long_mode: DOT
+            width: 336
+
+        # Divider
+        - obj:
+            x: 16
+            y: 148
+            width: 336
+            height: 1
+            bg_color: 0x333333
+
+        # Watch status section
+        - label:
+            x: 16
+            y: 160
+            text: "WATCH"
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            id: lbl_watch_status
+            x: 16
+            y: 178
+            text: "Not connected"
+            text_color: 0x999999
+            text_font: montserrat_14
+        - label:
+            id: lbl_watch_battery
+            x: 16
+            y: 198
+            text: ""
+            text_color: 0x999999
+            text_font: montserrat_14
+        - label:
+            id: lbl_watch_sync
+            x: 16
+            y: 218
+            text: "Never synced"
+            text_color: 0x999999
+            text_font: montserrat_14
+
+        # Divider
+        - obj:
+            x: 16
+            y: 248
+            width: 336
+            height: 1
+            bg_color: 0x333333
+
+        # Bridge status section
+        - label:
+            x: 16
+            y: 260
+            text: "BRIDGE"
+            text_color: 0x888888
+            text_font: montserrat_12
+        - label:
+            id: lbl_bridge_wifi
+            x: 16
+            y: 278
+            text: "WiFi: --"
+            text_color: 0x999999
+            text_font: montserrat_14
+        - label:
+            id: lbl_bridge_server
+            x: 16
+            y: 298
+            text: "Server: --"
+            text_color: 0x999999
+            text_font: montserrat_14
+        - label:
+            id: lbl_bridge_reminders
+            x: 16
+            y: 318
+            text: "Reminders: 0 / 56"
+            text_color: 0x999999
+            text_font: montserrat_14
+
+        # Clock at bottom
+        - label:
+            id: lbl_clock
+            align: BOTTOM_MID
+            y: -12
+            text: "00:00"
+            text_color: 0x666666
+            text_font: montserrat_24
+
+# Globals for display dimming
+globals:
+  - id: display_dimmed
+    type: bool
+    initial_value: "false"
+  - id: display_last_touch
+    type: uint32_t
+    initial_value: "1"
+  - id: paired_watch_addr
+    type: uint64_t
+    restore_value: true
+    initial_value: "0"
+
+# Interval to update LVGL labels and handle dimming
+interval:
+  - interval: 10s
+    then:
+      - lambda: |-
+          // Persist paired watch address to NVS if it changed
+          uint64_t current = id(pinetime_bridge_id)->get_paired_address();
+          if (current != 0 && current != id(paired_watch_addr)) {
+            id(paired_watch_addr) = current;
+            ESP_LOGI("config", "Saved paired watch address: 0x%012llX", current);
+          }
+  - interval: 1s
+    then:
+      - lambda: |-
+          // Update clock
+          auto time = id(sntp_time).now();
+          if (time.is_valid()) {
+            char buf[6];
+            snprintf(buf, sizeof(buf), "%02d:%02d", time.hour, time.minute);
+            lv_label_set_text(id(lbl_clock), buf);
+          }
+
+          // Auto-dim after 30 seconds of no touch
+          uint32_t now = millis();
+          if (!id(display_dimmed) && id(display_last_touch) > 0 && (now - id(display_last_touch) > 30000)) {
+            id(display_dimmed) = true;
+            id(main_display)->set_brightness(5);  // very dim but touch stays alive
+          }
+  - interval: 10s
+    then:
+      - lambda: |-
+          // Update bridge status labels
+          auto *bridge = id(pinetime_bridge_id);
+
+          // WiFi
+          float signal = id(device_wifi_signal).state;
+          char wifi_buf[32];
+          snprintf(wifi_buf, sizeof(wifi_buf), "WiFi: %.0f dBm", signal);
+          lv_label_set_text(id(lbl_bridge_wifi), wifi_buf);
+
+          // Server status
+          if (bridge->is_server_reachable()) {
+            lv_label_set_text(id(lbl_bridge_server), "Server: reachable");
+            lv_obj_set_style_text_color(id(lbl_bridge_server), lv_color_hex(0x4CAF50), LV_PART_MAIN);
+          } else {
+            lv_label_set_text(id(lbl_bridge_server), "Server: unreachable");
+            lv_obj_set_style_text_color(id(lbl_bridge_server), lv_color_hex(0xF44336), LV_PART_MAIN);
+          }
+
+          // Reminder count
+          char rem_buf[32];
+          snprintf(rem_buf, sizeof(rem_buf), "Reminders: %u / 56", (unsigned)bridge->get_reminder_count());
+          lv_label_set_text(id(lbl_bridge_reminders), rem_buf);
+
+          // Next reminder
+          uint8_t next_h, next_m;
+          std::string next_msg;
+          if (bridge->get_next_reminder(next_h, next_m, next_msg)) {
+            char time_buf[6];
+            snprintf(time_buf, sizeof(time_buf), "%02d:%02d", next_h, next_m);
+            lv_label_set_text(id(lbl_next_time), time_buf);
+            lv_label_set_text(id(lbl_next_msg), next_msg.c_str());
+            lv_obj_set_style_text_color(id(lbl_next_time), lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+          } else {
+            lv_label_set_text(id(lbl_next_time), "--:--");
+            lv_label_set_text(id(lbl_next_msg), "No upcoming reminders");
+            lv_obj_set_style_text_color(id(lbl_next_time), lv_color_hex(0x666666), LV_PART_MAIN);
+          }
+
+          // Watch status
+          uint8_t bat = bridge->get_watch_battery();
+          if (bat > 0) {
+            char watch_buf[64];
+            snprintf(watch_buf, sizeof(watch_buf), "Battery: %u%% | Steps: %u", bat, bridge->get_watch_steps());
+            lv_label_set_text(id(lbl_watch_status), watch_buf);
+            lv_obj_set_style_text_color(id(lbl_watch_status), lv_color_hex(0x4CAF50), LV_PART_MAIN);
+
+            auto fw = bridge->get_watch_firmware();
+            if (!fw.empty()) {
+              char fw_buf[48];
+              snprintf(fw_buf, sizeof(fw_buf), "Firmware: %s", fw.c_str());
+              lv_label_set_text(id(lbl_watch_battery), fw_buf);
+            }
+          } else {
+            lv_label_set_text(id(lbl_watch_status), "Not connected");
+            lv_obj_set_style_text_color(id(lbl_watch_status), lv_color_hex(0x999999), LV_PART_MAIN);
+            lv_label_set_text(id(lbl_watch_battery), "");
+          }
+
+          // Last sync
+          auto sync_str = bridge->get_last_sync_time();
+          lv_label_set_text(id(lbl_watch_sync), sync_str.c_str());
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+    continuous: true
+    interval: 1200ms
+    window: 120ms
+  on_ble_advertise:
+    - then:
+        - lambda: |-
+            auto name = x.get_name();
+            if (name == "InfiniTime") {
+              id(pinetime_bridge_id)->on_ble_advertise(x.address_uint64(), name, x.get_rssi());
+            }
+
+ble_client:
+  - mac_address: !secret watch_mac
+    id: pinetime_client
+    auto_connect: false
+
+external_components:
+  - source:
+      type: local
+      path: components
+
+pinetime_bridge:
+  id: pinetime_bridge_id
+  ble_client_id: pinetime_client
+  api_base_url: !secret api_base_url
+  user_id: !secret user_id
+  bridge_id: !secret bridge_id
+  poll_interval: 60s

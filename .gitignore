@@ -1,0 +1,9 @@
+*.db
+esphome/secrets.yaml
+esphome/.esphome/
+server/pinetime-bridge-server
+server/firmware/
+InfiniTime/
+InfiniSim/
+__pycache__/
+*.pyc

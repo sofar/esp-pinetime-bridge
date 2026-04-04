@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PineTime Reminder Bridge</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #333; }
+  .container { max-width: 900px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4em; margin-bottom: 8px; }
+  h2 { font-size: 1.1em; margin: 16px 0 8px; color: #555; }
+  .section-label { font-size: 0.8em; color: #666; margin-bottom: 4px; }
+
+  /* Status bar */
+  .status { display: flex; gap: 12px; padding: 10px 14px; background: #fff; border-radius: 8px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); font-size: 0.85em; }
+  .status .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }
+  .dot.on { background: #4caf50; }
+  .dot.off { background: #ccc; }
+
+  /* Cards */
+  .card { background: #fff; border-radius: 8px; padding: 14px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .card .row { display: flex; justify-content: space-between; align-items: center; }
+  .card .msg { font-weight: 500; margin-bottom: 4px; }
+  .card .meta { font-size: 0.82em; color: #888; }
+  .card .actions { display: flex; gap: 6px; }
+
+  .priority-0 { border-left: 4px solid #8bc34a; }
+  .priority-1 { border-left: 4px solid #ff9800; }
+  .priority-2 { border-left: 4px solid #f44336; }
+
+  /* Buttons */
+  button, .btn { border: none; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
+  .btn-primary { background: #1976d2; color: #fff; }
+  .btn-danger { background: #e53935; color: #fff; }
+  .btn-sm { padding: 4px 10px; font-size: 0.8em; }
+  .btn-outline { background: transparent; border: 1px solid #999; color: #555; }
+
+  /* Form */
+  .form-card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .form-row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .form-row label { display: block; font-size: 0.8em; color: #666; margin-bottom: 2px; }
+  .form-row .field { flex: 1; min-width: 80px; }
+  .form-row input, .form-row select, .form-row textarea { width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9em; }
+
+  /* Radio-style toggle buttons */
+  .toggle-group { display: flex; gap: 0; }
+  .toggle-btn { padding: 6px 12px; border: 1px solid #ddd; background: #fff; cursor: pointer; font-size: 0.82em; color: #666; transition: all 0.15s; }
+  .toggle-btn:first-child { border-radius: 4px 0 0 4px; }
+  .toggle-btn:last-child { border-radius: 0 4px 4px 0; }
+  .toggle-btn:not(:first-child) { border-left: none; }
+  .toggle-btn.active { background: #1976d2; color: #fff; border-color: #1976d2; }
+  .toggle-btn.active + .toggle-btn { border-left-color: #1976d2; }
+
+  /* Priority colors */
+  .toggle-btn.pri-low.active { background: #8bc34a; border-color: #8bc34a; }
+  .toggle-btn.pri-med.active { background: #ff9800; border-color: #ff9800; }
+  .toggle-btn.pri-high.active { background: #f44336; border-color: #f44336; }
+
+  /* Day-of-week buttons */
+  .days-row { display: flex; gap: 4px; }
+  .day-btn { width: 36px; height: 30px; border: 1px solid #ddd; border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.75em; text-align: center; padding: 0; display: inline-flex; align-items: center; justify-content: center; transition: all 0.15s; }
+  .day-btn.active { background: #1976d2; color: #fff; border-color: #1976d2; }
+
+  /* Disabled / greyed out */
+  .disabled-group { opacity: 0.35; pointer-events: none; }
+
+  /* Date fields */
+  .date-fields { display: flex; gap: 8px; }
+  .date-fields input { width: 70px; }
+
+  .notify-form { display: flex; gap: 8px; }
+  .notify-form input { flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+
+  /* Logs */
+  .log-list { font-size: 0.82em; }
+  .log-item { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; display: flex; gap: 8px; align-items: baseline; }
+  .log-item:hover { background: #fafafa; }
+  .log-time { color: #999; font-size: 0.8em; min-width: 130px; font-variant-numeric: tabular-nums; }
+  .log-source { font-size: 0.75em; font-weight: 600; padding: 1px 6px; border-radius: 3px; min-width: 48px; text-align: center; }
+  .log-source.server { background: #e3f2fd; color: #1565c0; }
+  .log-source.bridge { background: #fff3e0; color: #e65100; }
+  .log-source.watch { background: #e8f5e9; color: #2e7d32; }
+  .log-msg { flex: 1; }
+  .log-level-warn .log-msg { color: #f57f17; }
+  .log-level-error .log-msg { color: #c62828; font-weight: 500; }
+
+  .empty { text-align: center; color: #aaa; padding: 20px; font-size: 0.9em; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+  .tab { padding: 8px 16px; border-radius: 6px 6px 0 0; cursor: pointer; background: #e0e0e0; font-size: 0.85em; }
+  .tab.active { background: #fff; font-weight: 500; }
+
+  /* User tabs */
+  .user-bar { display: flex; gap: 4px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .user-tab { padding: 6px 14px; border-radius: 6px 6px 0 0; cursor: pointer; background: #e0e0e0; font-size: 0.85em; border: none; }
+  .user-tab.active { background: #fff; font-weight: 500; }
+
+  /* Divider inside form */
+  .form-divider { border-top: 1px solid #eee; margin: 10px 0; }
+
+  /* Two-column layout for reminders tab */
+  .reminders-layout { display: flex; gap: 16px; }
+  .reminders-left { width: 260px; flex-shrink: 0; }
+  .reminders-right { flex: 1; min-width: 0; }
+  @media (max-width: 700px) {
+    .reminders-layout { flex-direction: column; }
+    .reminders-left { width: 100%; }
+  }
+
+  /* Upcoming calendar */
+  .upcoming { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; }
+  .upcoming-header { padding: 10px 14px; font-size: 0.85em; font-weight: 600; background: #fafafa; border-bottom: 1px solid #eee; }
+  .upcoming-day { padding: 6px 14px; font-size: 0.75em; font-weight: 600; color: #1976d2; background: #f0f4ff; border-bottom: 1px solid #e8ecf4; }
+  .upcoming-day.today { color: #e53935; background: #fff5f5; border-bottom-color: #fce4e4; }
+  .upcoming-item { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.1s; }
+  .upcoming-item:hover { background: #f5f8ff; }
+  .upcoming-item.selected { background: #1976d2; color: #fff; }
+  .upcoming-item.selected .upcoming-msg { color: #fff; }
+  .upcoming-item.selected .upcoming-time { color: #fff; }
+  .upcoming-item:last-child { border-bottom: none; }
+  .upcoming-time { font-size: 0.85em; font-weight: 500; font-variant-numeric: tabular-nums; min-width: 42px; }
+  .upcoming-pip { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .upcoming-pip.p0 { background: #8bc34a; }
+  .upcoming-pip.p1 { background: #ff9800; }
+  .upcoming-pip.p2 { background: #f44336; }
+  .upcoming-msg { font-size: 0.82em; color: #444; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .upcoming-recur { font-size: 0.7em; color: #aaa; }
+  .upcoming-empty { padding: 20px 14px; text-align: center; color: #aaa; font-size: 0.85em; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>PineTime Reminder Bridge</h1>
+
+  <div class="user-bar" id="userBar">
+    <button class="btn btn-outline btn-sm" onclick="showNewUser()">+ User</button>
+  </div>
+
+  <div id="newUserForm" style="display:none" class="form-card">
+    <div class="form-row">
+      <div class="field"><label>Name</label><input id="newUserName"></div>
+      <div class="field"><label>Watch MAC</label><input id="newUserMac" placeholder="AA:BB:CC:DD:EE:FF"></div>
+      <div class="field"><label>Bridge ID</label><input id="newUserBridge" placeholder="bridge-01"></div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="createUser()">Create</button>
+    <button class="btn btn-outline btn-sm" onclick="hideNewUser()">Cancel</button>
+  </div>
+
+  <div class="status" id="statusBar">
+    <span id="reminderCountText"></span>
+    <span id="watchStatusText"></span>
+    <span><span class="dot off" id="bridgeDot"></span> <span id="bridgeText">Bridge: unknown</span></span>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('reminders')">Reminders</div>
+    <div class="tab" onclick="switchTab('notify')">Notify</div>
+    <div class="tab" onclick="switchTab('logs')">Logs</div>
+    <div class="tab" onclick="switchTab('equipment')">Equipment</div>
+  </div>
+
+  <!-- Reminders tab -->
+  <div id="tab-reminders">
+    <div class="reminders-layout">
+      <div class="reminders-left">
+        <div class="upcoming">
+          <div class="upcoming-header">Upcoming</div>
+          <div id="upcomingList"><div class="upcoming-empty">No reminders</div></div>
+        </div>
+      </div>
+      <div class="reminders-right">
+        <div style="margin-bottom: 8px;">
+          <button class="btn btn-primary" onclick="clearForm()">+ New Reminder</button>
+          <span id="editingLabel" style="display:none; margin-left: 8px; font-size: 0.85em; color: #666;">Editing reminder</span>
+        </div>
+
+        <div id="reminderForm" class="form-card">
+
+          <div class="form-row">
+            <div class="field"><label>Message (max 63 chars)</label><input id="fMsg" maxlength="63" placeholder="Take medication"></div>
+          </div>
+
+          <div class="form-row">
+            <div class="field" style="max-width:70px"><label>Hour</label><input id="fHour" type="number" min="0" max="23" value="9"></div>
+            <div class="field" style="max-width:70px"><label>Min</label><input id="fMin" type="number" min="0" max="59" value="0"></div>
+          </div>
+
+          <div class="form-divider"></div>
+
+          <div class="section-label">Priority</div>
+          <div class="form-row">
+            <div class="toggle-group" id="priorityGroup">
+              <button class="toggle-btn pri-low" data-val="0" onclick="setPriority(this)">Low</button>
+              <button class="toggle-btn pri-med active" data-val="1" onclick="setPriority(this)">Medium</button>
+              <button class="toggle-btn pri-high" data-val="2" onclick="setPriority(this)">High</button>
+            </div>
+          </div>
+
+          <div class="form-divider"></div>
+
+          <div class="section-label">Recurrence</div>
+          <div class="form-row">
+            <div class="toggle-group" id="recurGroup">
+              <button class="toggle-btn active" data-val="once" onclick="setRecurrence(this)">Once</button>
+              <button class="toggle-btn" data-val="daily" onclick="setRecurrence(this)">Daily</button>
+              <button class="toggle-btn" data-val="weekly" onclick="setRecurrence(this)">Weekly</button>
+              <button class="toggle-btn" data-val="date" onclick="setRecurrence(this)">Date</button>
+            </div>
+          </div>
+
+          <div class="form-row" id="daysRow">
+            <div class="field disabled-group" id="daysGroup">
+              <div class="section-label">Days of week</div>
+              <div class="days-row">
+                <button class="day-btn" data-day="0" onclick="toggleDay(this)">Sun</button>
+                <button class="day-btn" data-day="1" onclick="toggleDay(this)">Mon</button>
+                <button class="day-btn" data-day="2" onclick="toggleDay(this)">Tue</button>
+                <button class="day-btn" data-day="3" onclick="toggleDay(this)">Wed</button>
+                <button class="day-btn" data-day="4" onclick="toggleDay(this)">Thu</button>
+                <button class="day-btn" data-day="5" onclick="toggleDay(this)">Fri</button>
+                <button class="day-btn" data-day="6" onclick="toggleDay(this)">Sat</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-row" id="dateRow">
+            <div class="disabled-group" id="dateGroup">
+              <div class="section-label">Specific date</div>
+              <div class="date-fields">
+                <div><label>Month</label><input id="fMonth" type="number" min="1" max="12" placeholder="1-12"></div>
+                <div><label>Day</label><input id="fDay" type="number" min="1" max="31" placeholder="1-31"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-divider"></div>
+
+          <button class="btn btn-primary" id="saveBtn" onclick="saveReminder()">Add Reminder</button>
+          <button class="btn btn-danger" id="deleteEditBtn" style="display:none" onclick="deleteEditing()">Delete</button>
+        </div>
+
+        <div id="reminderList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notify tab -->
+  <div id="tab-notify" style="display:none">
+    <div class="form-card">
+      <div class="notify-form">
+        <input id="notifyMsg" placeholder="Message to send to watch..." maxlength="97">
+        <button class="btn btn-primary" onclick="sendNotify()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ack log tab -->
+  <div id="tab-logs" style="display:none">
+    <div id="logList" class="card" style="max-height:500px; overflow-y:auto;"></div>
+  </div>
+
+  <!-- Equipment tab -->
+  <div id="tab-equipment" style="display:none">
+
+    <!-- User section -->
+    <div class="form-card">
+      <div class="section-label" style="font-weight:600; font-size:0.9em; margin-bottom:8px;">User</div>
+      <div class="form-row">
+        <div class="field"><label>Name</label><input id="eqName"></div>
+        <div class="field" style="max-width:80px"><label>User ID</label><input id="eqUserId" disabled style="background:#f5f5f5;"></div>
+      </div>
+      <div style="margin-top:8px;">
+        <button class="btn btn-primary btn-sm" onclick="saveEquipment()">Save</button>
+        <button class="btn btn-danger btn-sm" style="float:right;" onclick="deleteCurrentUser()">Delete User</button>
+      </div>
+    </div>
+
+    <!-- Bridge section -->
+    <div class="form-card">
+      <div class="section-label" style="font-weight:600; font-size:0.9em; margin-bottom:8px;">Bridge</div>
+      <div class="form-row">
+        <div class="field"><label>Bridge ID</label><input id="eqBridge" placeholder="bridge-01"></div>
+      </div>
+      <div id="eqBridgeStatus" style="font-size:0.85em; color:#666; margin-top:4px;"></div>
+      <div style="margin-top:8px;">
+        <button class="btn btn-primary btn-sm" onclick="saveEquipment()">Save</button>
+        <a id="eqBridgeLink" href="#" target="_blank" class="btn btn-outline btn-sm" style="display:none; text-decoration:none;">Open Bridge UI</a>
+      </div>
+    </div>
+
+    <!-- Watch section -->
+    <div class="form-card">
+      <div class="section-label" style="font-weight:600; font-size:0.9em; margin-bottom:8px;">Watch</div>
+      <div class="form-row">
+        <div class="field"><label>MAC Address</label><input id="eqMac" placeholder="AA:BB:CC:DD:EE:FF"></div>
+      </div>
+      <div id="eqWatchStatus" style="font-size:0.85em; color:#666; margin-top:4px;"></div>
+      <div class="form-divider"></div>
+      <div class="section-label">Nearby Watches</div>
+      <div id="discoveredList" style="margin-bottom:8px;"><span style="font-size:0.82em; color:#888;">Scanning...</span></div>
+      <div class="form-divider"></div>
+      <div class="section-label">Pairing</div>
+      <div id="pairingPanel">
+        <div id="pairingIdle"></div>
+        <div id="pairingWaiting" style="display:none;">
+          <span style="font-size:0.85em; color:#666;">Waiting for watch to show passkey...</span>
+        </div>
+        <div id="pairingInput" style="display:none;">
+          <div style="font-size:0.85em; color:#e65100; margin-bottom:6px;">Enter the 6-digit passkey shown on the watch:</div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input id="pairingPasskey" type="text" maxlength="6" pattern="[0-9]{6}" placeholder="000000" style="width:100px; font-size:1.2em; text-align:center; letter-spacing:4px; font-family:monospace;">
+            <button class="btn btn-primary btn-sm" onclick="submitPasskey()">Submit</button>
+            <button class="btn btn-outline btn-sm" onclick="cancelPairing()">Cancel</button>
+          </div>
+        </div>
+        <div id="pairingSuccess" style="display:none;">
+          <span style="font-size:0.85em; color:#4caf50; font-weight:500;">Paired successfully!</span>
+          <button class="btn btn-outline btn-sm" onclick="clearPairing()" style="margin-left:8px;">OK</button>
+        </div>
+        <div id="pairingFailed" style="display:none;">
+          <span id="pairingFailMsg" style="font-size:0.85em; color:#f44336;"></span>
+          <button class="btn btn-outline btn-sm" onclick="clearPairing()" style="margin-left:8px;">Retry</button>
+        </div>
+      </div>
+      <div class="form-divider"></div>
+      <div class="section-label">Firmware</div>
+      <div id="firmwarePanel">
+        <div id="fwInfo" style="font-size:0.85em; color:#666; margin-bottom:8px;">No firmware uploaded</div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <label class="btn btn-outline btn-sm" style="cursor:pointer;">
+            Upload DFU Zip
+            <input type="file" id="fwFile" accept=".zip" style="display:none;" onchange="uploadFirmware()">
+          </label>
+          <button class="btn btn-primary btn-sm" id="fwUpdateBtn" style="display:none;" onclick="triggerDfu()">Update Watch Firmware</button>
+          <span id="fwProgress" style="font-size:0.82em; color:#666;"></span>
+        </div>
+      </div>
+      <div class="form-divider"></div>
+      <div style="margin-top:8px;">
+        <button class="btn btn-primary btn-sm" onclick="saveEquipment()">Save</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API = '';
+let currentUserId = null;
+let editingReminderId = null;
+let cachedReminders = [];
+
+// ---- Radio-style toggle helpers ----
+
+function setPriority(btn) {
+  document.querySelectorAll('#priorityGroup .toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function getPriority() {
+  const active = document.querySelector('#priorityGroup .toggle-btn.active');
+  return active ? parseInt(active.dataset.val) : 1;
+}
+
+function setRecurrence(btn) {
+  document.querySelectorAll('#recurGroup .toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  updateRecurUI();
+}
+
+function getRecurType() {
+  const active = document.querySelector('#recurGroup .toggle-btn.active');
+  return active ? active.dataset.val : 'once';
+}
+
+function updateRecurUI() {
+  const type = getRecurType();
+  const daysGroup = document.getElementById('daysGroup');
+  const dateGroup = document.getElementById('dateGroup');
+  daysGroup.classList.toggle('disabled-group', type !== 'weekly');
+  dateGroup.classList.toggle('disabled-group', type !== 'date');
+}
+
+function toggleDay(btn) { btn.classList.toggle('active'); }
+
+function getRecurrence() {
+  const type = getRecurType();
+  if (type === 'daily') return 0x80;
+  if (type === 'once' || type === 'date') return 0x00;
+  if (type === 'weekly') {
+    let mask = 0;
+    document.querySelectorAll('.day-btn.active').forEach(b => { mask |= (1 << parseInt(b.dataset.day)); });
+    return mask;
+  }
+  return 0;
+}
+
+// ---- User management ----
+
+async function loadUsers() {
+  const res = await fetch(API + '/api/users');
+  const users = await res.json();
+  const bar = document.getElementById('userBar');
+  // Keep the + User button, remove old user tabs
+  bar.querySelectorAll('.user-tab').forEach(t => t.remove());
+  const addBtn = bar.querySelector('.btn');
+  users.forEach(u => {
+    const tab = document.createElement('button');
+    tab.className = 'user-tab' + (u.id == currentUserId ? ' active' : '');
+    tab.textContent = u.name;
+    tab.title = 'ID: ' + u.id + ' | MAC: ' + u.watch_mac + ' | Bridge: ' + u.bridge_id;
+    tab.dataset.uid = u.id;
+    tab.onclick = () => selectUser(u.id);
+    bar.insertBefore(tab, addBtn);
+  });
+  if (users.length && !currentUserId) {
+    currentUserId = users[0].id;
+    bar.querySelector('.user-tab').classList.add('active');
+    refresh();
+  }
+}
+
+function selectUser(id) {
+  currentUserId = id;
+  document.querySelectorAll('.user-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.uid == id);
+  });
+  refresh();
+}
+
+function showNewUser() { document.getElementById('newUserForm').style.display = ''; }
+function hideNewUser() { document.getElementById('newUserForm').style.display = 'none'; }
+
+async function createUser() {
+  const body = {
+    name: document.getElementById('newUserName').value,
+    watch_mac: document.getElementById('newUserMac').value,
+    bridge_id: document.getElementById('newUserBridge').value
+  };
+  await fetch(API + '/api/users', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  hideNewUser();
+  await loadUsers();
+}
+
+// ---- Tabs ----
+
+function switchTab(name) {
+  ['reminders','notify','logs','equipment'].forEach(t => {
+    document.getElementById('tab-' + t).style.display = t === name ? '' : 'none';
+  });
+  document.querySelectorAll('.tab').forEach(el => {
+    el.classList.toggle('active', el.textContent.toLowerCase().startsWith(name.slice(0,3)));
+  });
+  if (name === 'logs') loadLogs();
+  if (name === 'equipment') loadEquipment();
+  if (name !== 'equipment') stopDiscoveryPoll();
+}
+
+// ---- Reminders ----
+
+function describeRecurrence(r, month, day) {
+  if (month > 0 && day > 0) return monthName(month) + ' ' + day;
+  if (r === 0x80) return 'Daily';
+  if (r === 0x00) return 'Once';
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  let parts = [];
+  for (let i = 0; i < 7; i++) { if (r & (1 << i)) parts.push(days[i]); }
+  return parts.join(', ');
+}
+
+function monthName(m) { return ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m] || ''; }
+
+const priorityLabels = ['Low','Medium','High'];
+
+async function loadReminders() {
+  if (!currentUserId) return;
+  const res = await fetch(API + '/api/users/' + currentUserId + '/reminders');
+  cachedReminders = await res.json();
+  document.getElementById('reminderCountText').textContent = 'Reminders: ' + cachedReminders.length + ' / 56';
+  const list = document.getElementById('reminderList');
+  if (!cachedReminders.length) {
+    list.innerHTML = '<div class="empty">No reminders yet</div>';
+    buildUpcoming([]);
+    return;
+  }
+  list.innerHTML = cachedReminders.map((r, idx) => `
+    <div class="card priority-${r.priority}">
+      <div class="row">
+        <div>
+          <div class="msg">${esc(r.message || '(no message)')}</div>
+          <div class="meta">
+            ${pad(r.hours)}:${pad(r.minutes)} &middot; ${describeRecurrence(r.recurrence, r.month||0, r.day||0)}
+            &middot; ${priorityLabels[r.priority] || 'Medium'}
+            &middot; ${r.enabled ? 'Enabled' : 'Disabled'}
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-outline btn-sm" onclick="editReminderByIndex(${idx})">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteReminder(${r.reminder_id})">Del</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+  buildUpcoming(cachedReminders);
+}
+
+function buildUpcoming(reminders) {
+  const el = document.getElementById('upcomingList');
+  if (!reminders.length) {
+    el.innerHTML = '<div class="upcoming-empty">No reminders</div>';
+    return;
+  }
+
+  const now = new Date();
+  const horizon = new Date(now);
+  horizon.setDate(horizon.getDate() + 14);
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  let occurrences = [];
+
+  for (const r of reminders) {
+    if (!r.enabled) continue;
+
+    if (r.month > 0 && r.day > 0) {
+      const d = new Date(now.getFullYear(), r.month - 1, r.day, r.hours, r.minutes);
+      if (d > now && d <= horizon) {
+        occurrences.push({date: d, reminder: r});
+      }
+    } else if (r.recurrence === 0x80) {
+      let d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), r.hours, r.minutes);
+      if (d <= now) d.setDate(d.getDate() + 1);
+      while (d <= horizon) {
+        occurrences.push({date: new Date(d), reminder: r});
+        d.setDate(d.getDate() + 1);
+      }
+    } else if (r.recurrence === 0x00) {
+      let d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), r.hours, r.minutes);
+      if (d <= now) d.setDate(d.getDate() + 1);
+      if (d <= horizon) {
+        occurrences.push({date: d, reminder: r});
+      }
+    } else {
+      let d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), r.hours, r.minutes);
+      if (d <= now) d.setDate(d.getDate() + 1);
+      let safety = 0;
+      while (d <= horizon && safety < 60) {
+        if (r.recurrence & (1 << d.getDay())) {
+          occurrences.push({date: new Date(d), reminder: r});
+        }
+        d.setDate(d.getDate() + 1);
+        safety++;
+      }
+    }
+  }
+
+  occurrences.sort((a, b) => a.date - b.date);
+
+  if (!occurrences.length) {
+    el.innerHTML = '<div class="upcoming-empty">No upcoming reminders</div>';
+    return;
+  }
+
+  let html = '';
+  let lastDayKey = '';
+  const todayKey = fmtDayKey(now);
+  const tmrw = new Date(now); tmrw.setDate(tmrw.getDate() + 1);
+  const tmrwKey = fmtDayKey(tmrw);
+
+  for (const occ of occurrences) {
+    const dayKey = fmtDayKey(occ.date);
+    if (dayKey !== lastDayKey) {
+      let label;
+      if (dayKey === todayKey) label = 'Today';
+      else if (dayKey === tmrwKey) label = 'Tomorrow';
+      else label = dayNames[occ.date.getDay()] + ', ' + monthNames[occ.date.getMonth()] + ' ' + occ.date.getDate();
+      html += '<div class="upcoming-day' + (dayKey === todayKey ? ' today' : '') + '">' + label + '</div>';
+      lastDayKey = dayKey;
+    }
+    const r = occ.reminder;
+    const idx = cachedReminders.findIndex(c => c.reminder_id === r.reminder_id);
+    html += '<div class="upcoming-item" data-rid="' + r.reminder_id + '" onclick="editReminderByIndex(' + idx + ')">'
+      + '<span class="upcoming-time">' + pad(r.hours) + ':' + pad(r.minutes) + '</span>'
+      + '<span class="upcoming-pip p' + r.priority + '"></span>'
+      + '<span class="upcoming-msg">' + esc(r.message || '(no message)') + '</span>'
+      + '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function fmtDayKey(d) {
+  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate());
+}
+
+async function saveReminder() {
+  if (!currentUserId) return alert('Select a user first');
+  const body = {
+    hours: parseInt(document.getElementById('fHour').value),
+    minutes: parseInt(document.getElementById('fMin').value),
+    priority: getPriority(),
+    message: document.getElementById('fMsg').value,
+    recurrence: getRecurrence(),
+    month: 0,
+    day: 0,
+    enabled: true
+  };
+  if (getRecurType() === 'date') {
+    body.month = parseInt(document.getElementById('fMonth').value) || 0;
+    body.day = parseInt(document.getElementById('fDay').value) || 0;
+  }
+  if (editingReminderId !== null) {
+    body.reminder_id = editingReminderId;
+    await fetch(API + '/api/users/' + currentUserId + '/reminders/' + editingReminderId, {
+      method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+  } else {
+    await fetch(API + '/api/users/' + currentUserId + '/reminders', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+  }
+  clearForm();
+  loadReminders();
+}
+
+function highlightUpcoming(rid) {
+  document.querySelectorAll('.upcoming-item').forEach(el => {
+    el.classList.toggle('selected', el.dataset.rid == rid);
+  });
+}
+
+function editReminderByIndex(idx) {
+  if (idx < 0 || idx >= cachedReminders.length) return;
+  const r = cachedReminders[idx];
+  editingReminderId = r.reminder_id;
+  highlightUpcoming(r.reminder_id);
+  document.getElementById('saveBtn').textContent = 'Update Reminder';
+  document.getElementById('deleteEditBtn').style.display = '';
+  document.getElementById('editingLabel').style.display = '';
+  document.getElementById('fHour').value = r.hours;
+  document.getElementById('fMin').value = r.minutes;
+  document.getElementById('fMsg').value = r.message;
+
+  // Set priority radio
+  document.querySelectorAll('#priorityGroup .toggle-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.val) === r.priority);
+  });
+
+  // Set recurrence radio
+  let recurType = 'once';
+  if (r.month > 0 && r.day > 0) {
+    recurType = 'date';
+    document.getElementById('fMonth').value = r.month;
+    document.getElementById('fDay').value = r.day;
+  } else if (r.recurrence === 0x80) {
+    recurType = 'daily';
+  } else if (r.recurrence > 0) {
+    recurType = 'weekly';
+    document.querySelectorAll('.day-btn').forEach(b => {
+      b.classList.toggle('active', (r.recurrence & (1 << parseInt(b.dataset.day))) !== 0);
+    });
+  }
+  document.querySelectorAll('#recurGroup .toggle-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.val === recurType);
+  });
+  updateRecurUI();
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+async function deleteEditing() {
+  if (editingReminderId === null) return;
+  if (!confirm('Delete this reminder?')) return;
+  await fetch(API + '/api/users/' + currentUserId + '/reminders/' + editingReminderId, { method: 'DELETE' });
+  clearForm();
+  loadReminders();
+}
+
+async function deleteReminder(rid) {
+  if (!confirm('Delete this reminder?')) return;
+  await fetch(API + '/api/users/' + currentUserId + '/reminders/' + rid, { method: 'DELETE' });
+  loadReminders();
+}
+
+function clearForm() {
+  editingReminderId = null;
+  highlightUpcoming(null);
+  document.getElementById('saveBtn').textContent = 'Add Reminder';
+  document.getElementById('deleteEditBtn').style.display = 'none';
+  document.getElementById('editingLabel').style.display = 'none';
+  document.getElementById('fMsg').value = '';
+  document.getElementById('fHour').value = 9;
+  document.getElementById('fMin').value = 0;
+  document.getElementById('fMonth').value = '';
+  document.getElementById('fDay').value = '';
+  // Reset priority to Medium
+  document.querySelectorAll('#priorityGroup .toggle-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.val === '1');
+  });
+  // Reset recurrence to Once
+  document.querySelectorAll('#recurGroup .toggle-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.val === 'once');
+  });
+  document.querySelectorAll('.day-btn').forEach(b => b.classList.remove('active'));
+  updateRecurUI();
+}
+
+// ---- Notifications ----
+
+async function sendNotify() {
+  if (!currentUserId) return;
+  const msg = document.getElementById('notifyMsg').value;
+  if (!msg) return;
+  await fetch(API + '/api/users/' + currentUserId + '/notifications', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({message: msg, priority: 1})
+  });
+  document.getElementById('notifyMsg').value = '';
+  alert('Notification queued');
+}
+
+// ---- Logs ----
+
+async function loadLogs() {
+  if (!currentUserId) return;
+  const res = await fetch(API + '/api/users/' + currentUserId + '/logs');
+  const logs = await res.json();
+  const el = document.getElementById('logList');
+  if (!logs.length) {
+    el.innerHTML = '<div class="empty">No log entries yet</div>';
+    return;
+  }
+  el.innerHTML = '<div class="log-list">' + logs.map(e => `
+    <div class="log-item log-level-${e.level}">
+      <span class="log-time">${fmtTime(e.created_at)}</span>
+      <span class="log-source ${e.source}">${e.source}</span>
+      <span class="log-msg">${esc(e.message)}</span>
+    </div>
+  `).join('') + '</div>';
+}
+
+// ---- Equipment ----
+
+async function loadEquipment() {
+  if (!currentUserId) return;
+  try {
+    const res = await fetch(API + '/api/users/' + currentUserId);
+    if (!res.ok) return;
+    const user = await res.json();
+
+    // User section
+    document.getElementById('eqName').value = user.name || '';
+    document.getElementById('eqUserId').value = user.id;
+
+    // Bridge section
+    document.getElementById('eqBridge').value = user.bridge_id || '';
+    let bridgeHtml = '';
+    if (user.bridge_id) {
+      try {
+        const sres = await fetch(API + '/api/bridges/' + user.bridge_id + '/status');
+        if (sres.ok) {
+          const s = await sres.json();
+          const online = s.last_heartbeat ? true : false;
+          bridgeHtml += online
+            ? '<span style="color:#4caf50">Online</span>'
+            : '<span style="color:#999">Offline</span>';
+          if (s.bridge_ip) bridgeHtml += ' &middot; IP: ' + s.bridge_ip;
+          if (s.last_heartbeat) bridgeHtml += ' &middot; Last heartbeat: ' + fmtTime(s.last_heartbeat);
+
+          // Show/hide bridge UI link
+          const linkEl = document.getElementById('eqBridgeLink');
+          if (s.bridge_ip) {
+            linkEl.href = 'http://' + s.bridge_ip + '/';
+            linkEl.style.display = '';
+          } else {
+            linkEl.style.display = 'none';
+          }
+
+          // Watch section
+          let watchParts = [];
+          if (s.connected) {
+            watchParts.push('<span style="color:#4caf50">Connected</span>');
+          } else if (s.watch_battery > 0) {
+            watchParts.push('<span style="color:#888">Paired (disconnected)</span>');
+          } else {
+            watchParts.push('<span style="color:#999">Not paired</span>');
+          }
+          if (s.watch_battery > 0) watchParts.push('Battery: ' + s.watch_battery + '%');
+          if (s.watch_firmware) watchParts.push('Firmware: ' + esc(s.watch_firmware));
+          if (s.watch_manufacturer) watchParts.push('Manufacturer: ' + esc(s.watch_manufacturer));
+          if (s.watch_software) watchParts.push('Software: ' + esc(s.watch_software));
+          if (s.watch_steps > 0) watchParts.push('Steps: ' + s.watch_steps);
+          if (s.last_sync) {
+            watchParts.push('Last sync: ' + fmtTime(s.last_sync));
+          } else if (s.watch_battery > 0) {
+            watchParts.push('Never synced');
+          }
+          document.getElementById('eqWatchStatus').innerHTML = watchParts.join('<br>');
+        }
+      } catch(e) {}
+    } else {
+      bridgeHtml = '<span style="color:#999">No bridge assigned</span>';
+      document.getElementById('eqWatchStatus').innerHTML = '<span style="color:#999">No bridge assigned</span>';
+    }
+    document.getElementById('eqBridgeStatus').innerHTML = bridgeHtml;
+
+    // Watch MAC
+    document.getElementById('eqMac').value = user.watch_mac || '';
+
+    // Firmware
+    loadFirmwareInfo();
+
+    // Discovered watches
+    if (user.bridge_id) {
+      loadDiscoveredWatches(user.bridge_id);
+    }
+
+    // Pairing state
+    if (user.bridge_id) {
+      try {
+        const pres = await fetch(API + '/api/bridges/' + user.bridge_id + '/pairing');
+        if (pres.ok) {
+          const p = await pres.json();
+          showPairingState(p.state);
+          if (p.state === 'passkey_needed' || p.state === 'passkey_entered') {
+            startPairingPoll(user.bridge_id);
+          }
+        }
+      } catch(e) {}
+    }
+  } catch(e) {}
+}
+
+async function saveEquipment() {
+  if (!currentUserId) return;
+  const body = {
+    name: document.getElementById('eqName').value,
+    watch_mac: document.getElementById('eqMac').value,
+    bridge_id: document.getElementById('eqBridge').value
+  };
+  await fetch(API + '/api/users/' + currentUserId, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+  });
+  loadUsers();
+  loadEquipment();
+}
+
+async function deleteCurrentUser() {
+  if (!currentUserId) return;
+  if (!confirm('Delete this user and all their reminders?')) return;
+  await fetch(API + '/api/users/' + currentUserId, { method: 'DELETE' });
+  currentUserId = null;
+  await loadUsers();
+  switchTab('reminders');
+}
+
+// ---- Firmware ----
+
+async function loadFirmwareInfo() {
+  try {
+    const res = await fetch(API + '/api/firmware/info');
+    if (res.ok) {
+      const info = await res.json();
+      document.getElementById('fwInfo').innerHTML =
+        'Version: <strong>' + esc(info.version) + '</strong> &middot; ' +
+        (info.bin_size / 1024).toFixed(0) + ' KB &middot; ' +
+        'Uploaded: ' + fmtTime(info.uploaded_at);
+      document.getElementById('fwUpdateBtn').style.display = '';
+    }
+  } catch(e) {}
+}
+
+async function uploadFirmware() {
+  const file = document.getElementById('fwFile').files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  document.getElementById('fwProgress').textContent = 'Uploading...';
+  try {
+    const res = await fetch(API + '/api/firmware/upload', { method: 'POST', body: form });
+    if (res.ok) {
+      document.getElementById('fwProgress').textContent = 'Uploaded!';
+      loadFirmwareInfo();
+    } else {
+      document.getElementById('fwProgress').textContent = 'Upload failed: ' + await res.text();
+    }
+  } catch(e) {
+    document.getElementById('fwProgress').textContent = 'Upload error';
+  }
+}
+
+async function triggerDfu() {
+  const bridgeId = await getBridgeId();
+  if (!bridgeId) { alert('No bridge assigned'); return; }
+  if (!confirm('Update the watch firmware? The watch will restart after the update.')) return;
+
+  // Tell the bridge to start DFU via a pairing-state-like mechanism
+  // We'll use a special "dfu" state
+  await fetch(API + '/api/bridges/' + bridgeId + '/pairing', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({state: 'dfu'})
+  });
+  document.getElementById('fwProgress').textContent = 'DFU initiated — check Logs for progress';
+}
+
+// ---- Discovery ----
+
+let discoveryTimer = null;
+
+async function loadDiscoveredWatches(bridgeId) {
+  try {
+    const res = await fetch(API + '/api/bridges/' + bridgeId + '/discovered');
+    if (!res.ok) return;
+    const watches = await res.json();
+    const el = document.getElementById('discoveredList');
+    if (!watches || watches.length === 0) {
+      el.innerHTML = '<span style="font-size:0.82em; color:#888;">No InfiniTime watches found nearby. Make sure the watch is powered on.</span>';
+      return;
+    }
+    el.innerHTML = watches.map(w => {
+      const bars = w.rssi > -50 ? '████' : w.rssi > -65 ? '███░' : w.rssi > -80 ? '██░░' : '█░░░';
+      return '<div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #f0f0f0;">'
+        + '<span style="font-family:monospace; font-size:0.85em;">' + w.mac + '</span>'
+        + '<span style="font-size:0.82em; color:#888;">' + w.name + '</span>'
+        + '<span style="font-size:0.75em; color:#aaa; font-family:monospace;" title="RSSI: ' + w.rssi + ' dBm">' + bars + '</span>'
+        + '<button class="btn btn-primary btn-sm" onclick="selectWatch(\'' + w.mac + '\')">Pair</button>'
+        + '</div>';
+    }).join('');
+
+    // Keep polling while on equipment tab
+    if (!discoveryTimer) {
+      discoveryTimer = setInterval(() => loadDiscoveredWatches(bridgeId), 10000);
+    }
+  } catch(e) {}
+}
+
+function stopDiscoveryPoll() {
+  if (discoveryTimer) { clearInterval(discoveryTimer); discoveryTimer = null; }
+}
+
+async function selectWatch(mac) {
+  const bridgeId = await getBridgeId();
+  if (!bridgeId) return;
+
+  // Also update the user's watch MAC
+  document.getElementById('eqMac').value = mac;
+  saveEquipment();
+
+  // Tell server to tell bridge to connect to this MAC
+  await fetch(API + '/api/bridges/' + bridgeId + '/pairing', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({state: 'connecting', passkey: mac})
+  });
+
+  showPairingState('waiting');
+  startPairingPoll(bridgeId);
+}
+
+// ---- Pairing ----
+
+let pairingPollTimer = null;
+
+function showPairingState(state) {
+  ['Idle','Waiting','Input','Success','Failed'].forEach(s =>
+    document.getElementById('pairing' + s).style.display = 'none');
+  switch (state) {
+    case 'idle': document.getElementById('pairingIdle').style.display = ''; break;
+    case 'waiting': document.getElementById('pairingWaiting').style.display = ''; break;
+    case 'passkey_needed': document.getElementById('pairingInput').style.display = ''; break;
+    case 'passkey_entered': document.getElementById('pairingWaiting').style.display = ''; break;
+    case 'paired': document.getElementById('pairingSuccess').style.display = ''; break;
+    case 'failed': document.getElementById('pairingFailed').style.display = ''; break;
+    default: document.getElementById('pairingIdle').style.display = ''; break;
+  }
+}
+
+async function getBridgeId() {
+  const res = await fetch(API + '/api/users/' + currentUserId);
+  if (!res.ok) return null;
+  const user = await res.json();
+  return user.bridge_id;
+}
+
+function startPairingPoll(bridgeId) {
+  if (pairingPollTimer) clearInterval(pairingPollTimer);
+  pairingPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(API + '/api/bridges/' + bridgeId + '/pairing');
+      if (!res.ok) return;
+      const p = await res.json();
+      showPairingState(p.state);
+      if (p.state === 'failed') {
+        document.getElementById('pairingFailMsg').textContent = 'Pairing failed: ' + (p.passkey || 'unknown error');
+        stopPairingPoll();
+      } else if (p.state === 'paired') {
+        stopPairingPoll();
+      }
+    } catch(e) {}
+  }, 2000);
+}
+
+function stopPairingPoll() {
+  if (pairingPollTimer) { clearInterval(pairingPollTimer); pairingPollTimer = null; }
+}
+
+async function submitPasskey() {
+  const passkey = document.getElementById('pairingPasskey').value;
+  if (!/^\d{6}$/.test(passkey)) { alert('Enter a 6-digit number'); return; }
+  const bridgeId = await getBridgeId();
+  if (!bridgeId) return;
+  await fetch(API + '/api/bridges/' + bridgeId + '/pairing', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({state: 'passkey_entered', passkey: passkey})
+  });
+  showPairingState('waiting');
+  startPairingPoll(bridgeId);
+}
+
+async function cancelPairing() {
+  stopPairingPoll();
+  const bridgeId = await getBridgeId();
+  if (bridgeId) {
+    await fetch(API + '/api/bridges/' + bridgeId + '/pairing', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({state: 'idle'})
+    });
+  }
+  showPairingState('idle');
+  document.getElementById('pairingPasskey').value = '';
+}
+
+async function clearPairing() {
+  stopPairingPoll();
+  const bridgeId = await getBridgeId();
+  if (bridgeId) {
+    await fetch(API + '/api/bridges/' + bridgeId + '/pairing', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({state: 'idle'})
+    });
+  }
+  showPairingState('idle');
+  document.getElementById('pairingPasskey').value = '';
+}
+
+// ---- Bridge status ----
+
+async function loadStatus() {
+  const res = await fetch(API + '/api/users');
+  const users = await res.json();
+  const user = users.find(u => u.id == currentUserId);
+  if (!user) return;
+  if (!user.bridge_id) return;
+  try {
+    const sres = await fetch(API + '/api/bridges/' + user.bridge_id + '/status');
+    if (sres.ok) {
+      const s = await sres.json();
+      // Bridge status
+      document.getElementById('bridgeDot').className = 'dot ' + (s.last_heartbeat ? 'on' : 'off');
+      document.getElementById('bridgeText').textContent = s.last_heartbeat ? 'Bridge: online' : 'Bridge: offline';
+
+      // Watch status
+      let watchParts = [];
+      if (s.connected) {
+        watchParts.push('Watch: connected');
+      }
+      if (s.watch_battery > 0) {
+        watchParts.push('Battery: ' + s.watch_battery + '%');
+      }
+      if (s.last_sync) {
+        watchParts.push('Last sync: ' + fmtTime(s.last_sync));
+      } else {
+        watchParts.push('Watch: never synced');
+      }
+      document.getElementById('watchStatusText').textContent = watchParts.join(' | ');
+    }
+  } catch(e) {}
+}
+
+// ---- Helpers ----
+
+function pad(n) { return String(n).padStart(2, '0'); }
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function fmtTime(s) {
+  if (!s) return '';
+  const d = new Date(s);
+  if (isNaN(d)) return s;
+  return d.toLocaleString();
+}
+
+function refresh() {
+  loadReminders();
+  loadStatus();
+}
+
+// ---- Init ----
+loadUsers();
+updateRecurUI();
+setInterval(() => { if (currentUserId) loadStatus(); }, 30000);
+setInterval(() => { if (currentUserId) refresh(); }, 3600000);
+</script>
+</body>
+</html>
