@@ -136,6 +136,16 @@ void PineTimeBridge::loop() {
     return;
   }
 
+  // After DFU completes, force a reconnect to sync time + reminders to the freshly booted watch
+  if (dfu_client_.state() == DfuState::COMPLETE || dfu_client_.state() == DfuState::FAILED) {
+    ESP_LOGI(TAG, "[DFU] %s — forcing reconnect for time sync + reminder verify",
+             dfu_client_.state() == DfuState::COMPLETE ? "Complete" : "Failed");
+    last_sync_hash_ = 0;
+    needs_ble_sync_ = true;
+    last_watch_poll_ms_ = 0;  // trigger immediate watch poll (time sync, battery, steps)
+    dfu_client_.reset();
+  }
+
   // Process BLE command queue when connected and services discovered
   if (!ble_busy_ && !command_queue_.empty() && services_discovered_ && ble_connected_) {
     process_next_command_();
@@ -145,11 +155,14 @@ void PineTimeBridge::loop() {
   if (now - last_poll_ms_ > poll_interval_ms_) {
     last_poll_ms_ = now;
     poll_api_();
-    sync_reminders_to_watch_(); // queues BLE command only if data changed
+    // Skip reminder sync if DFU is pending/active — let DFU proceed cleanly
+    if (dfu_client_.state() == DfuState::IDLE) {
+      sync_reminders_to_watch_(); // queues BLE command only if data changed
+    }
   }
 
-  // If we have pending BLE work and aren't connected, connect
-  if (needs_ble_sync_ && !ble_connected_ && paired_address_ != 0) {
+  // If we have pending BLE work and aren't connected, connect (skip during DFU)
+  if (needs_ble_sync_ && !ble_connected_ && paired_address_ != 0 && dfu_client_.state() == DfuState::IDLE) {
     ESP_LOGI(TAG, "[BLE] Connecting to watch for sync...");
     this->parent()->set_enabled(true);
     this->parent()->set_state(espbt::ClientState::CONNECTING);
@@ -284,7 +297,10 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
 
     case ESP_GATTC_WRITE_CHAR_EVT:
       if (param->write.status == ESP_GATT_OK) {
-        ESP_LOGI(TAG, "[BLE] Write OK, handle=0x%04x, queue=%u remaining", param->write.handle, command_queue_.size());
+        // Suppress per-write logs during DFU (progress is logged by DfuClient every 10 chunks)
+        if (dfu_client_.state() == DfuState::IDLE) {
+          ESP_LOGI(TAG, "[BLE] Write OK, handle=0x%04x, queue=%u remaining", param->write.handle, command_queue_.size());
+        }
         if (param->write.handle == ans_handle_) {
           ESP_LOGI(TAG, "[NOTIFY] ANS write confirmed by watch");
         }
@@ -554,10 +570,11 @@ void PineTimeBridge::discover_services_() {
   if (upload_handle_ != 0 && sync_handle_ != 0) {
     services_discovered_ = true;
     ESP_LOGI(TAG, "Reminder service discovered");
-    // Queue pending reminders now that we have handles
-    sync_reminders_to_watch_();
+    // Queue pending reminders now that we have handles (skip if DFU active)
+    if (dfu_client_.state() == DfuState::IDLE) {
+      sync_reminders_to_watch_();
+    }
     // Force a poll to send any pending notifications now that we're connected
-    last_poll_ms_ = 0;
     last_poll_ms_ = 0;
   } else {
     ESP_LOGW(TAG, "Reminder service NOT found on watch");

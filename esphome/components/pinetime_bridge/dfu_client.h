@@ -32,6 +32,7 @@ class DfuClient {
   void process();  // Call from loop
 
   DfuState state() const { return state_; }
+  void reset() { state_ = DfuState::IDLE; }
   float progress() const;  // 0.0 to 1.0
   const char *state_str() const;
   const char *error() const { return error_msg_; }
