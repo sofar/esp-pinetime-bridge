@@ -245,6 +245,14 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
       remote_log_("bridge", "info", "BLE disconnected from watch");
       ble_connected_ = false;
       services_discovered_ = false;
+      // If commands were still pending, reset hash so next connection retries the full sync
+      if (!command_queue_.empty() || pending_writes_ > 0) {
+        ESP_LOGW(TAG, "[SYNC] Disconnected with %u queued + %u pending writes — will retry sync",
+                 command_queue_.size(), pending_writes_);
+        last_sync_hash_ = 0;
+        // Clear stale queue — partial sync leaves watch inconsistent, need full retry
+        while (!command_queue_.empty()) command_queue_.pop();
+      }
       pending_writes_ = 0;
       upload_handle_ = 0;
       delete_handle_ = 0;
@@ -922,15 +930,23 @@ void PineTimeBridge::start_dfu() {
 }
 
 void PineTimeBridge::remote_log_(const char *source, const char *level, const char *message) {
-  char body[256];
-  snprintf(body, sizeof(body), "{\"source\":\"%s\",\"level\":\"%s\",\"message\":\"%s\"}", source, level, message);
+  // Escape message for JSON (replace " with ' to avoid breaking JSON)
+  std::string escaped;
+  for (const char *p = message; *p; p++) {
+    if (*p == '"') escaped += '\'';
+    else if (*p == '\\') escaped += '/';
+    else if (*p == '\n') escaped += ' ';
+    else escaped += *p;
+  }
+  char body[512];
+  snprintf(body, sizeof(body), "{\"source\":\"%s\",\"level\":\"%s\",\"message\":\"%s\"}", source, level, escaped.c_str());
   std::string path = "/api/users/" + user_id_ + "/logs";
   http_post_(path, body);
 }
 
 void PineTimeBridge::poll_api_() {
   poll_count_++;
-  ESP_LOGI(TAG, "[API] Poll #%u: fetching reminders for user %s...", poll_count_, user_id_.c_str());
+  ESP_LOGD(TAG, "[API] Poll #%u: fetching reminders for user %s...", poll_count_, user_id_.c_str());
   std::string path = "/api/users/" + user_id_ + "/reminders";
   std::string response = http_get_(path);
 
@@ -967,11 +983,7 @@ void PineTimeBridge::poll_api_() {
 
   cJSON_Delete(root);
   server_reachable_ = true;
-  ESP_LOGI(TAG, "[API] Fetched %u reminders from server", api_reminders_.size());
-  for (const auto &r : api_reminders_) {
-    ESP_LOGI(TAG, "[API]   #%u %02u:%02u \"%s\" pri=%u recur=0x%02x en=%d",
-             r.reminder_id, r.hours, r.minutes, r.message.c_str(), r.priority, r.recurrence, r.enabled);
-  }
+  ESP_LOGD(TAG, "[API] Fetched %u reminders from server", api_reminders_.size());
 
   // First successful poll after boot
   if (last_sync_hash_ == 0) {
@@ -1046,24 +1058,43 @@ void PineTimeBridge::sync_reminders_to_watch_() {
     ESP_LOGD(TAG, "[SYNC] Reminders unchanged (hash=0x%08x), no sync needed", hash);
     return;
   }
-  ESP_LOGI(TAG, "[SYNC] Reminders changed (hash 0x%08x -> 0x%08x)", last_sync_hash_, hash);
-  last_sync_hash_ = hash;  // update immediately to prevent re-triggering
+  ESP_LOGI(TAG, "[SYNC] Reminders changed (hash 0x%08x -> 0x%08x), %u reminders:", last_sync_hash_, hash, count);
+  for (const auto &r : api_reminders_) {
+    ESP_LOGI(TAG, "[SYNC]   #%u %02u:%02u \"%s\" pri=%u recur=0x%02x en=%d",
+             r.reminder_id, r.hours, r.minutes, r.message.c_str(), r.priority, r.recurrence, r.enabled);
+  }
 
-  // Only queue the BLE command if we have handles (connected)
-  if (sync_handle_ == 0) {
+  // Only queue the BLE commands if we have handles (connected)
+  if (upload_handle_ == 0) {
     ESP_LOGI(TAG, "[SYNC] Not connected yet, will sync after connection");
     needs_ble_sync_ = true;
     ble_work_done_ = false;
-    return;
+    return;  // Don't update hash — sync hasn't happened yet
   }
-  BleCommand cmd;
-  cmd.type = BleCommandType::SYNC_ALL;
-  cmd.data = std::move(data);
-  command_queue_.push(std::move(cmd));
 
-  ESP_LOGI(TAG, "[SYNC] Queued %u reminders (%u bytes) for watch", count, 1 + count * sizeof(WatchReminder));
+  last_sync_hash_ = hash;  // update only after commands are actually queued
+
+  // Clear all reminders on watch first (write 0xFF to delete char = delete all)
+  if (delete_handle_ != 0) {
+    BleCommand del_cmd;
+    del_cmd.type = BleCommandType::DELETE_REMINDER;
+    del_cmd.data = {0xFF};  // 0xFF = delete all
+    command_queue_.push(std::move(del_cmd));
+  }
+
+  // Upload each reminder individually (72 bytes each, fits in MTU)
+  for (uint8_t i = 0; i < count; i++) {
+    WatchReminder wr = api_reminders_[i].to_watch_reminder();
+    BleCommand cmd;
+    cmd.type = BleCommandType::WRITE_REMINDER;
+    cmd.data.assign(reinterpret_cast<const uint8_t*>(&wr),
+                    reinterpret_cast<const uint8_t*>(&wr) + sizeof(WatchReminder));
+    command_queue_.push(std::move(cmd));
+  }
+
+  ESP_LOGI(TAG, "[SYNC] Queued delete-all + %u individual reminder uploads", count);
   char logmsg[128];
-  snprintf(logmsg, sizeof(logmsg), "Syncing %u reminders to watch (%u bytes)", count, (unsigned)(1 + count * sizeof(WatchReminder)));
+  snprintf(logmsg, sizeof(logmsg), "Syncing %u reminders to watch (individual writes)", count);
   remote_log_("bridge", "info", logmsg);
 }
 
