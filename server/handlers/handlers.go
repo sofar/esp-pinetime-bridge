@@ -570,7 +570,7 @@ func (h *Handler) SetPairingState(w http.ResponseWriter, r *http.Request) {
 		h.store.SetPairingState(bridgeID, current)
 		h.store.AddLog(&models.LogEntry{UserID: 0, Source: "server", Level: "info", Message: fmt.Sprintf("Passkey entered for bridge %s", bridgeID)})
 	case "paired":
-		h.store.SetPairingState(bridgeID, &models.PairingRequest{State: "paired"})
+		h.store.ClearPairingState(bridgeID)
 		h.store.AddLog(&models.LogEntry{UserID: 0, Source: "bridge", Level: "info", Message: fmt.Sprintf("Watch paired successfully (bridge %s)", bridgeID)})
 	case "failed":
 		msg := "Pairing failed"

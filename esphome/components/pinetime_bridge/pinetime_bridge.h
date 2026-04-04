@@ -72,7 +72,7 @@ class PineTimeBridge : public Component, public ble_client::BLEClientNode {
   std::string watch_hw_rev_;
   std::string watch_serial_;
 
-  bool is_connected() const { return services_discovered_; }
+  bool is_connected() const { return ble_connected_; }
   bool is_server_reachable() const { return server_reachable_; }
   void check_pairing_request_();
   std::string get_last_sync_time() const { return last_sync_time_.empty() ? "Never" : last_sync_time_; }
@@ -124,9 +124,14 @@ class PineTimeBridge : public Component, public ble_client::BLEClientNode {
   bool ble_busy_ = false;
   bool needs_ble_sync_ = false;      // true when we have data to push to watch
   bool ble_work_done_ = false;       // true when sync/acks complete, ready to disconnect
+  bool ble_connected_ = false;       // our own tracking of BLE connection state
+  uint8_t pending_writes_ = 0;      // count of non-queue writes in flight
   uint32_t last_poll_ms_ = 0;
   uint32_t last_heartbeat_ms_ = 0;
   uint32_t ble_connect_time_ms_ = 0; // when we last connected, for idle disconnect
+  uint32_t last_watch_poll_ms_ = 0;  // when we last connected to read watch data
+  uint32_t last_watch_seen_ms_ = 0; // when scanner last saw the watch
+  bool watch_was_away_ = false;     // true if watch wasn't seen for >5 min
 
   // Config
   std::string api_base_url_;
@@ -173,6 +178,7 @@ class PineTimeBridge : public Component, public ble_client::BLEClientNode {
   std::string http_get_(const std::string &path);
   bool http_post_(const std::string &path, const std::string &body);
   void remote_log_(const char *source, const char *level, const char *message);
+  void restore_paired_address_from_server_();
 
   // DFU
   DfuClient dfu_client_;

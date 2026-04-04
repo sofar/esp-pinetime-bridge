@@ -111,6 +111,9 @@ void PineTimeBridge::setup() {
   last_poll_ms_ = millis() - poll_interval_ms_ + 10000;  // first poll 10s after boot
   last_heartbeat_ms_ = millis() - 280000;  // first heartbeat ~20s after boot
 
+  // Restore paired watch address from server user record after WiFi is up
+  // (done in loop once server is reachable)
+
   // Register GAP callback for passkey handling
   g_bridge = this;
   esp_ble_gap_register_callback(bridge_gap_event_handler);
@@ -127,8 +130,14 @@ void PineTimeBridge::setup() {
 void PineTimeBridge::loop() {
   uint32_t now = millis();
 
-  // Process BLE command queue when connected
-  if (!ble_busy_ && !command_queue_.empty() && services_discovered_) {
+  // DFU processing takes priority
+  if (dfu_client_.state() != DfuState::IDLE && dfu_client_.state() != DfuState::COMPLETE && dfu_client_.state() != DfuState::FAILED) {
+    dfu_client_.process();
+    return;
+  }
+
+  // Process BLE command queue when connected and services discovered
+  if (!ble_busy_ && !command_queue_.empty() && services_discovered_ && ble_connected_) {
     process_next_command_();
   }
 
@@ -139,34 +148,38 @@ void PineTimeBridge::loop() {
     sync_reminders_to_watch_(); // queues BLE command only if data changed
   }
 
-  // If we have pending BLE work and aren't connected, request connection
-  if (needs_ble_sync_ && !this->parent()->enabled) {
-    ESP_LOGI(TAG, "Connecting to watch for sync...");
+  // If we have pending BLE work and aren't connected, connect
+  if (needs_ble_sync_ && !ble_connected_ && paired_address_ != 0) {
+    ESP_LOGI(TAG, "[BLE] Connecting to watch for sync...");
     this->parent()->set_enabled(true);
+    this->parent()->set_state(espbt::ClientState::CONNECTING);
+    esp_bd_addr_t bda;
+    bda[0] = (paired_address_ >> 40) & 0xFF;
+    bda[1] = (paired_address_ >> 32) & 0xFF;
+    bda[2] = (paired_address_ >> 24) & 0xFF;
+    bda[3] = (paired_address_ >> 16) & 0xFF;
+    bda[4] = (paired_address_ >> 8) & 0xFF;
+    bda[5] = paired_address_ & 0xFF;
+    esp_ble_gattc_open(this->parent()->get_gattc_if(), bda, BLE_ADDR_TYPE_RANDOM, true);
     ble_connect_time_ms_ = now;
+    needs_ble_sync_ = false;  // clear so we don't keep re-requesting
   }
 
-  // After sync completes and command queue is drained, disconnect to save watch battery
-  if (services_discovered_ && command_queue_.empty() && !ble_busy_ && ble_work_done_) {
-    ESP_LOGI(TAG, "Sync complete, disconnecting to save watch battery");
+  // After sync completes and command queue is drained, disconnect
+  if (ble_connected_ && command_queue_.empty() && !ble_busy_ && ble_work_done_) {
+    ESP_LOGI(TAG, "[BLE] Sync complete, disconnecting to save watch battery");
+    esp_ble_gattc_close(this->parent()->get_gattc_if(), this->parent()->get_conn_id());
     this->parent()->set_enabled(false);
-    needs_ble_sync_ = false;
     ble_work_done_ = false;
   }
 
-  // Safety: disconnect after 30 seconds if still connected (something stalled)
-  if (services_discovered_ && ble_connect_time_ms_ > 0 && (now - ble_connect_time_ms_ > 30000)) {
-    ESP_LOGW(TAG, "BLE connection timeout, disconnecting");
+  // Safety: disconnect after 30 seconds if still connected
+  if (ble_connected_ && ble_connect_time_ms_ > 0 && (now - ble_connect_time_ms_ > 30000)) {
+    ESP_LOGW(TAG, "[BLE] Connection timeout, forcing disconnect");
+    esp_ble_gattc_close(this->parent()->get_gattc_if(), this->parent()->get_conn_id());
     this->parent()->set_enabled(false);
-    needs_ble_sync_ = false;
     ble_work_done_ = false;
     ble_connect_time_ms_ = 0;
-  }
-
-  // DFU processing
-  if (dfu_client_.state() != DfuState::IDLE && dfu_client_.state() != DfuState::COMPLETE && dfu_client_.state() != DfuState::FAILED) {
-    dfu_client_.process();
-    return;  // DFU takes priority over everything else
   }
 
   // Post discovered watches to server every 10 seconds
@@ -185,6 +198,24 @@ void PineTimeBridge::loop() {
     }
   }
 
+  // Periodic watch poll — every 30 minutes, connect to read battery/steps/sync time
+  static constexpr uint32_t WATCH_POLL_INTERVAL_MS = 30 * 60 * 1000UL;
+  if (paired_address_ != 0 && !ble_connected_ && !pairing_in_progress_ && dfu_client_.state() == DfuState::IDLE) {
+    bool periodic = (now - last_watch_poll_ms_ > WATCH_POLL_INTERVAL_MS);
+    bool returned = watch_was_away_;
+
+    if (periodic || returned) {
+      if (returned) {
+        ESP_LOGI(TAG, "[WATCH] Watch returned — connecting to sync");
+        watch_was_away_ = false;
+      } else {
+        ESP_LOGI(TAG, "[WATCH] Periodic poll — connecting to read battery/steps/time");
+      }
+      needs_ble_sync_ = true;
+      last_watch_poll_ms_ = now;
+    }
+  }
+
   // Periodic heartbeat (every 5 minutes)
   if (now - last_heartbeat_ms_ > 300000) {
     last_heartbeat_ms_ = now;
@@ -198,15 +229,23 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
     case ESP_GATTC_OPEN_EVT:
       if (param->open.status == ESP_GATT_OK) {
         ESP_LOGI(TAG, "Connected to PineTime");
+        ble_connected_ = true;
         ble_connect_time_ms_ = millis();
+        last_watch_poll_ms_ = millis();
         remote_log_("bridge", "info", "BLE connected to watch");
+        if (pairing_in_progress_) {
+          pairing_in_progress_ = false;
+          http_post_("/api/bridges/" + bridge_id_ + "/pairing", "{\"state\":\"paired\"}");
+        }
       }
       break;
 
     case ESP_GATTC_DISCONNECT_EVT:
       ESP_LOGW(TAG, "Disconnected from PineTime");
       remote_log_("bridge", "info", "BLE disconnected from watch");
+      ble_connected_ = false;
       services_discovered_ = false;
+      pending_writes_ = 0;
       upload_handle_ = 0;
       delete_handle_ = 0;
       list_handle_ = 0;
@@ -214,6 +253,15 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
       sync_handle_ = 0;
       ans_handle_ = 0;
       cts_handle_ = 0;
+      battery_handle_ = 0;
+      fw_rev_handle_ = 0;
+      mfr_handle_ = 0;
+      sw_rev_handle_ = 0;
+      model_handle_ = 0;
+      hw_rev_handle_ = 0;
+      serial_handle_ = 0;
+      steps_handle_ = 0;
+      dfu_rev_handle_ = 0;
       break;
 
     case ESP_GATTC_SEARCH_CMPL_EVT:
@@ -229,11 +277,22 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
     case ESP_GATTC_WRITE_CHAR_EVT:
       if (param->write.status == ESP_GATT_OK) {
         ESP_LOGI(TAG, "[BLE] Write OK, handle=0x%04x, queue=%u remaining", param->write.handle, command_queue_.size());
+        if (param->write.handle == ans_handle_) {
+          ESP_LOGI(TAG, "[NOTIFY] ANS write confirmed by watch");
+        }
       } else {
         ESP_LOGW(TAG, "[BLE] Write FAILED, handle=0x%04x status=%d", param->write.handle, param->write.status);
       }
       ble_busy_ = false;
-      if (command_queue_.empty()) {
+      if (pending_writes_ > 0) pending_writes_--;
+      if (command_queue_.empty() && pending_writes_ == 0 && dfu_client_.state() == DfuState::IDLE) {
+        // Verify sync by reading back reminder count from watch
+        if (list_handle_ != 0 && param->write.handle == sync_handle_) {
+          ESP_LOGI(TAG, "[SYNC] Write complete, reading back from watch to verify...");
+          esp_ble_gattc_read_char(this->parent()->get_gattc_if(), this->parent()->get_conn_id(),
+                                   list_handle_, ESP_GATT_AUTH_REQ_NONE);
+          break;  // Wait for read response before marking done
+        }
         ESP_LOGI(TAG, "[BLE] All commands sent, ready to disconnect");
         ble_work_done_ = true;
         // Record sync time
@@ -281,6 +340,24 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
         } else if (h == serial_handle_) {
           watch_serial_ = std::string((char *)param->read.value, param->read.value_len);
           ESP_LOGI(TAG, "[WATCH] Serial: %s", watch_serial_.c_str());
+        } else if (h == list_handle_) {
+          // Sync verification read-back
+          uint8_t watch_count = param->read.value[0];
+          size_t expected = api_reminders_.size();
+          if (watch_count == expected) {
+            ESP_LOGI(TAG, "[SYNC] Verified: watch has %u reminders (matches)", watch_count);
+            remote_log_("bridge", "info", "Sync verified: watch confirmed reminders");
+          } else {
+            ESP_LOGW(TAG, "[SYNC] Mismatch: watch has %u, expected %u", watch_count, expected);
+            remote_log_("bridge", "warn", "Sync mismatch: watch count differs");
+          }
+          // Now mark sync done
+          ble_work_done_ = true;
+          auto t = ::time(nullptr);
+          struct tm *tmm = ::localtime(&t);
+          char tbuf[32];
+          strftime(tbuf, sizeof(tbuf), "%Y-%m-%dT%H:%M:%S", tmm);
+          last_sync_time_ = tbuf;
         } else if (h == dfu_rev_handle_) {
           if (param->read.value_len >= 2) {
             uint16_t rev = param->read.value[0] | (param->read.value[1] << 8);
@@ -310,10 +387,10 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
 }
 
 // Helper to build 128-bit ESPBTUUID for our custom service characteristics
-static espbt::ESPBTUUID make_reminder_uuid(uint8_t char_lo, uint8_t char_hi) {
-  // 0006xxyy-78fc-48fe-8e23-433b3a1942d0 in little-endian byte order
+static espbt::ESPBTUUID make_reminder_uuid(uint8_t x, uint8_t y) {
+  // Match InfiniTime's CharUuid(x, y) which puts y at byte 12, x at byte 13
   uint8_t bytes[16] = {0xd0, 0x42, 0x19, 0x3a, 0x3b, 0x43, 0x23, 0x8e,
-                        0xfe, 0x48, 0xfc, 0x78, char_lo, char_hi, 0x06, 0x00};
+                        0xfe, 0x48, 0xfc, 0x78, y, x, 0x06, 0x00};
   return espbt::ESPBTUUID::from_raw(bytes);
 }
 
@@ -323,7 +400,15 @@ void PineTimeBridge::discover_services_() {
     return;
   }
 
+  // Debug: try to find reminder service and log what we're looking for
   auto svc_uuid = make_reminder_uuid(0x00, 0x00);
+  ESP_LOGI(TAG, "[SVC] Looking for reminder service: %s", svc_uuid.to_string().c_str());
+  auto *reminder_svc = client->get_service(svc_uuid);
+  ESP_LOGI(TAG, "[SVC] get_service result: %s", reminder_svc ? "FOUND" : "NOT FOUND");
+
+  // Also try the raw 16-byte comparison
+  auto *test_svc = client->get_service(espbt::ESPBTUUID::from_raw(REMINDER_SERVICE_UUID));
+  ESP_LOGI(TAG, "[SVC] get_service(raw) result: %s", test_svc ? "FOUND" : "NOT FOUND");
 
   // Reminder Service characteristics
   auto *chr = client->get_characteristic(svc_uuid, make_reminder_uuid(0x01, 0x00));
@@ -453,13 +538,24 @@ void PineTimeBridge::discover_services_() {
     }
   }
 
+  // Always sync time when connected (CTS)
+  if (cts_handle_ != 0) {
+    sync_time_();
+  }
+
   if (upload_handle_ != 0 && sync_handle_ != 0) {
     services_discovered_ = true;
-    ESP_LOGI(TAG, "Reminder service discovered, syncing time...");
-    sync_time_();
+    ESP_LOGI(TAG, "Reminder service discovered");
+    // Queue pending reminders now that we have handles
+    sync_reminders_to_watch_();
+    // Force a poll to send any pending notifications now that we're connected
+    last_poll_ms_ = 0;
     last_poll_ms_ = 0;
   } else {
     ESP_LOGW(TAG, "Reminder service NOT found on watch");
+    ble_connect_time_ms_ = millis();
+    needs_ble_sync_ = false;
+    ble_work_done_ = false;
   }
 }
 
@@ -635,11 +731,21 @@ static std::string mac_to_string(uint64_t address) {
 }
 
 void PineTimeBridge::on_ble_advertise(uint64_t address, const std::string &name, int rssi) {
-  // Only track InfiniTime watches
   if (name != "InfiniTime") return;
 
   uint32_t now = millis();
   std::string mac = mac_to_string(address);
+
+  // Track paired watch presence
+  if (address == paired_address_ && paired_address_ != 0) {
+    if (last_watch_seen_ms_ > 0 && (now - last_watch_seen_ms_ > 300000)) {
+      // Watch was away for >5 minutes, just came back
+      ESP_LOGI(TAG, "[SCAN] Paired watch returned after absence, triggering sync");
+      watch_was_away_ = true;
+      needs_ble_sync_ = true;
+    }
+    last_watch_seen_ms_ = now;
+  }
 
   // Update existing or add new
   for (auto &w : discovered_watches_) {
@@ -698,11 +804,15 @@ void PineTimeBridge::check_pairing_request_() {
   const char *passkey_field = cJSON_GetObjectItem(root, "passkey") ? cJSON_GetObjectItem(root, "passkey")->valuestring : "";
 
   if (strcmp(state, "dfu") == 0 && dfu_client_.state() == DfuState::IDLE) {
+    // Clear the DFU request on server FIRST to prevent retry loops
+    http_post_("/api/bridges/" + bridge_id_ + "/pairing", "{\"state\":\"idle\"}");
+
     ESP_LOGI(TAG, "[DFU] DFU requested via server, starting...");
     start_dfu();
     // After download, connect to the watch
     if (dfu_client_.state() == DfuState::CONNECTING) {
-      // Use the already-known watch address
+      needs_ble_sync_ = false;  // DFU takes over BLE
+      this->parent()->set_enabled(true);
       this->parent()->set_state(espbt::ClientState::CONNECTING);
       esp_bd_addr_t bda;
       auto addr = this->parent()->get_address();
@@ -712,11 +822,10 @@ void PineTimeBridge::check_pairing_request_() {
       bda[3] = (addr >> 16) & 0xFF;
       bda[4] = (addr >> 8) & 0xFF;
       bda[5] = addr & 0xFF;
+      ESP_LOGI(TAG, "[DFU] Connecting to watch for DFU...");
       esp_ble_gattc_open(this->parent()->get_gattc_if(), bda, BLE_ADDR_TYPE_RANDOM, true);
       ble_connect_time_ms_ = millis();
     }
-    // Clear the DFU request on server
-    http_post_("/api/bridges/" + bridge_id_ + "/pairing", "{\"state\":\"idle\"}");
   } else if (strcmp(state, "connecting") == 0 && !pairing_in_progress_ && strlen(passkey_field) == 17) {
     // User selected a watch MAC from the web UI — connect to it
     ESP_LOGI(TAG, "[PAIR] User selected watch %s, connecting...", passkey_field);
@@ -757,6 +866,31 @@ void PineTimeBridge::check_pairing_request_() {
     }
   }
 
+  cJSON_Delete(root);
+}
+
+void PineTimeBridge::restore_paired_address_from_server_() {
+  // Fetch user record to get watch MAC
+  std::string path = "/api/users/" + user_id_;
+  std::string response = http_get_(path);
+  if (response.empty()) return;
+
+  cJSON *root = cJSON_Parse(response.c_str());
+  if (!root) return;
+
+  const char *mac = cJSON_GetObjectItem(root, "watch_mac") ? cJSON_GetObjectItem(root, "watch_mac")->valuestring : "";
+  if (strlen(mac) == 17) {
+    uint64_t addr = 0;
+    unsigned int b[6];
+    if (sscanf(mac, "%02X:%02X:%02X:%02X:%02X:%02X", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) == 6) {
+      addr = ((uint64_t)b[0] << 40) | ((uint64_t)b[1] << 32) | ((uint64_t)b[2] << 24) |
+             ((uint64_t)b[3] << 16) | ((uint64_t)b[4] << 8) | (uint64_t)b[5];
+      if (addr != 0 && paired_address_ == 0) {
+        ESP_LOGI(TAG, "[PAIR] Restored watch MAC from server: %s", mac);
+        set_paired_address(addr);
+      }
+    }
+  }
   cJSON_Delete(root);
 }
 
@@ -839,11 +973,19 @@ void PineTimeBridge::poll_api_() {
              r.reminder_id, r.hours, r.minutes, r.message.c_str(), r.priority, r.recurrence, r.enabled);
   }
 
-  // Log first successful poll after boot
+  // First successful poll after boot
   if (last_sync_hash_ == 0) {
     char logmsg[128];
     snprintf(logmsg, sizeof(logmsg), "Bridge online, fetched %u reminders", (unsigned)api_reminders_.size());
     remote_log_("bridge", "info", logmsg);
+
+    // Restore paired watch address from server if NVS didn't have it
+    if (paired_address_ == 0) {
+      restore_paired_address_from_server_();
+    }
+
+    // TODO: auto-connect to read watch info on boot
+    // Disabled for now — the competing state machines cause a connect/disconnect loop
   }
 
   // Also check for pending notifications
@@ -858,13 +1000,24 @@ void PineTimeBridge::poll_api_() {
         const char *msg = cJSON_GetObjectItem(item, "message") ? cJSON_GetObjectItem(item, "message")->valuestring : "";
         int64_t notif_id = cJSON_GetObjectItem(item, "id") ? cJSON_GetObjectItem(item, "id")->valueint : 0;
 
-        if (ans_handle_ != 0 && strlen(msg) > 0) {
+        if (strlen(msg) > 0) {
+          if (ans_handle_ == 0) {
+            // Not connected — trigger connection to deliver notification
+            ESP_LOGI(TAG, "[NOTIFY] Pending notification, need BLE connection");
+            needs_ble_sync_ = true;
+            cJSON_Delete(root);
+            return;  // will send on next connection
+          }
           send_notification_(msg);
-          // Mark as delivered
+          // Mark as delivered on server
           char id_str[32];
           snprintf(id_str, sizeof(id_str), "%" PRId64, notif_id);
           std::string mark_path = "/api/notifications/" + std::string(id_str) + "/delivered";
           http_post_(mark_path, "{}");
+          // Log to server
+          char logmsg[128];
+          snprintf(logmsg, sizeof(logmsg), "Notification delivered to watch: \"%s\"", msg);
+          remote_log_("bridge", "info", logmsg);
         }
       }
       cJSON_Delete(root);
@@ -873,9 +1026,7 @@ void PineTimeBridge::poll_api_() {
 }
 
 void PineTimeBridge::sync_reminders_to_watch_() {
-  if (sync_handle_ == 0) return;
-
-  // Build sync packet: 1 byte count + N * sizeof(WatchReminder)
+  // Build sync packet to compute hash (even if not connected yet)
   uint8_t count = static_cast<uint8_t>(std::min(api_reminders_.size(), (size_t)56));
   std::vector<uint8_t> data;
   data.push_back(count);
@@ -886,24 +1037,29 @@ void PineTimeBridge::sync_reminders_to_watch_() {
     data.insert(data.end(), bytes, bytes + sizeof(WatchReminder));
   }
 
-  // Simple hash to detect changes — skip BLE write if data is identical to last sync
+  // Hash check — skip if data identical to last sync
   uint32_t hash = 5381;
   for (auto b : data) {
     hash = ((hash << 5) + hash) + b;
   }
   if (hash == last_sync_hash_) {
-    ESP_LOGI(TAG, "[SYNC] Reminders unchanged (hash=0x%08x), no BLE sync needed", hash);
+    ESP_LOGD(TAG, "[SYNC] Reminders unchanged (hash=0x%08x), no sync needed", hash);
     return;
   }
-  ESP_LOGI(TAG, "[SYNC] Reminders changed (hash 0x%08x -> 0x%08x), queueing BLE sync", last_sync_hash_, hash);
-  last_sync_hash_ = hash;
+  ESP_LOGI(TAG, "[SYNC] Reminders changed (hash 0x%08x -> 0x%08x)", last_sync_hash_, hash);
+  last_sync_hash_ = hash;  // update immediately to prevent re-triggering
 
+  // Only queue the BLE command if we have handles (connected)
+  if (sync_handle_ == 0) {
+    ESP_LOGI(TAG, "[SYNC] Not connected yet, will sync after connection");
+    needs_ble_sync_ = true;
+    ble_work_done_ = false;
+    return;
+  }
   BleCommand cmd;
   cmd.type = BleCommandType::SYNC_ALL;
   cmd.data = std::move(data);
   command_queue_.push(std::move(cmd));
-  needs_ble_sync_ = true;
-  ble_work_done_ = false;
 
   ESP_LOGI(TAG, "[SYNC] Queued %u reminders (%u bytes) for watch", count, 1 + count * sizeof(WatchReminder));
   char logmsg[128];
@@ -964,13 +1120,17 @@ void PineTimeBridge::sync_time_() {
   data[8] = 0;               // fractions256
   data[9] = 0;               // reason
 
+  pending_writes_++;
   auto status = esp_ble_gattc_write_char(
       this->parent()->get_gattc_if(), this->parent()->get_conn_id(), cts_handle_,
       sizeof(data), data, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
 
   if (status == ESP_OK) {
-    ESP_LOGI(TAG, "Synced time: %04d-%02d-%02d %02d:%02d:%02d",
+    ESP_LOGI(TAG, "[TIME] Synced time to watch: %04d-%02d-%02d %02d:%02d:%02d",
              now.year, now.month, now.day_of_month, now.hour, now.minute, now.second);
+    last_watch_poll_ms_ = millis();
+  } else {
+    pending_writes_--;
   }
 }
 
@@ -986,12 +1146,19 @@ void PineTimeBridge::send_notification_(const std::string &message, uint8_t cate
   size_t msg_len = std::min(message.size(), (size_t)97); // 100 - 3 header bytes
   data.insert(data.end(), message.begin(), message.begin() + msg_len);
 
+  pending_writes_++;
+
+  ESP_LOGI(TAG, "[NOTIFY] Writing %u bytes to ANS handle 0x%04x: cat=%u msg=\"%s\"",
+           data.size(), ans_handle_, category, message.c_str());
   auto status = esp_ble_gattc_write_char(
       this->parent()->get_gattc_if(), this->parent()->get_conn_id(), ans_handle_,
       data.size(), data.data(), ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
 
   if (status == ESP_OK) {
-    ESP_LOGI(TAG, "Sent notification: %s", message.c_str());
+    ESP_LOGI(TAG, "[NOTIFY] Write queued OK");
+  } else {
+    ESP_LOGW(TAG, "[NOTIFY] Write failed: %d", status);
+    pending_writes_--;
   }
 }
 

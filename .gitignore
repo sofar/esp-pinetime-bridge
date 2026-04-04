@@ -7,3 +7,4 @@ InfiniTime/
 InfiniSim/
 __pycache__/
 *.pyc
+.*.swp

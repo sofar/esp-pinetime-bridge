@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <esp_http_client.h>
+#include <esp_heap_caps.h>
 
 namespace esphome {
 namespace pinetime_bridge {
@@ -40,26 +41,38 @@ const char *DfuClient::state_str() const {
 }
 
 float DfuClient::progress() const {
-  if (state_ != DfuState::SENDING_FIRMWARE || bin_data_.empty()) return 0.0f;
-  return (float)bytes_sent_ / (float)bin_data_.size();
+  if (state_ != DfuState::SENDING_FIRMWARE || bin_size_ == 0) return 0.0f;
+  return (float)bytes_sent_ / (float)bin_size_;
 }
 
-// HTTP helper for downloading firmware files
-struct HttpBuf {
-  std::vector<uint8_t> data;
+// HTTP download into PSRAM buffer
+struct PsramBuf {
+  uint8_t *data;
+  size_t len;
+  size_t capacity;
 };
 
 static esp_err_t http_dl_handler(esp_http_client_event_t *evt) {
-  auto *buf = static_cast<HttpBuf *>(evt->user_data);
-  if (evt->event_id == HTTP_EVENT_ON_DATA && buf) {
-    auto *d = static_cast<uint8_t *>(evt->data);
-    buf->data.insert(buf->data.end(), d, d + evt->data_len);
+  auto *buf = static_cast<PsramBuf *>(evt->user_data);
+  if (evt->event_id == HTTP_EVENT_ON_DATA && buf && buf->data) {
+    if (buf->len + evt->data_len <= buf->capacity) {
+      memcpy(buf->data + buf->len, evt->data, evt->data_len);
+      buf->len += evt->data_len;
+    }
   }
   return ESP_OK;
 }
 
-static bool download_file(const std::string &url, std::vector<uint8_t> &out) {
-  HttpBuf buf;
+static bool download_to_psram(const std::string &url, uint8_t *&out, size_t &out_size, size_t max_size) {
+  // Pre-allocate in PSRAM
+  out = (uint8_t *)heap_caps_malloc(max_size, MALLOC_CAP_SPIRAM);
+  if (!out) {
+    ESP_LOGE(TAG, "Failed to allocate %u bytes in PSRAM", max_size);
+    return false;
+  }
+
+  PsramBuf buf = {out, 0, max_size};
+
   esp_http_client_config_t config = {};
   config.url = url.c_str();
   config.event_handler = http_dl_handler;
@@ -72,28 +85,36 @@ static bool download_file(const std::string &url, std::vector<uint8_t> &out) {
   int status = esp_http_client_get_status_code(client);
   esp_http_client_cleanup(client);
 
-  if (err != ESP_OK || status != 200) {
-    ESP_LOGW(TAG, "Download %s failed: err=%d status=%d", url.c_str(), err, status);
+  if (err != ESP_OK || status != 200 || buf.len == 0) {
+    ESP_LOGW(TAG, "Download %s failed: err=%d status=%d len=%u", url.c_str(), err, status, buf.len);
+    heap_caps_free(out);
+    out = nullptr;
+    out_size = 0;
     return false;
   }
-  out = std::move(buf.data);
+
+  out_size = buf.len;
   return true;
 }
 
 bool DfuClient::download_firmware_(const std::string &api_base_url) {
-  ESP_LOGI(TAG, "[DFU] Downloading firmware bin...");
-  if (!download_file(api_base_url + "/api/firmware/bin", bin_data_)) {
+  // Free any previous data
+  if (bin_data_) { heap_caps_free(bin_data_); bin_data_ = nullptr; bin_size_ = 0; }
+  if (dat_data_) { heap_caps_free(dat_data_); dat_data_ = nullptr; dat_size_ = 0; }
+
+  ESP_LOGI(TAG, "[DFU] Downloading firmware bin into PSRAM...");
+  if (!download_to_psram(api_base_url + "/api/firmware/bin", bin_data_, bin_size_, 500000)) {
     fail_("Failed to download firmware.bin");
     return false;
   }
-  ESP_LOGI(TAG, "[DFU] Downloaded bin: %u bytes", bin_data_.size());
+  ESP_LOGI(TAG, "[DFU] Downloaded bin: %u bytes (PSRAM)", bin_size_);
 
   ESP_LOGI(TAG, "[DFU] Downloading firmware dat...");
-  if (!download_file(api_base_url + "/api/firmware/dat", dat_data_)) {
+  if (!download_to_psram(api_base_url + "/api/firmware/dat", dat_data_, dat_size_, 1024)) {
     fail_("Failed to download firmware.dat");
     return false;
   }
-  ESP_LOGI(TAG, "[DFU] Downloaded dat: %u bytes", dat_data_.size());
+  ESP_LOGI(TAG, "[DFU] Downloaded dat: %u bytes", dat_size_);
 
   return true;
 }
@@ -134,7 +155,7 @@ void DfuClient::on_services_discovered(uint16_t ctrl_handle, uint16_t pkt_handle
 }
 
 void DfuClient::send_start_dfu_() {
-  ESP_LOGI(TAG, "[DFU] Sending Start DFU (image type=app, size=%u)", bin_data_.size());
+  ESP_LOGI(TAG, "[DFU] Sending Start DFU (image type=app, size=%u)", bin_size_);
 
   // Step 1: Write Start DFU command to control point
   uint8_t cmd[2] = {OP_START_DFU, IMAGE_TYPE_APP};
@@ -142,7 +163,7 @@ void DfuClient::send_start_dfu_() {
 
   // Step 2: Write firmware sizes to packet characteristic
   // Format: [softdevice_size(4), bootloader_size(4), app_size(4)]
-  uint32_t app_size = bin_data_.size();
+  uint32_t app_size = bin_size_;
   uint8_t sizes[12] = {0};
   memcpy(&sizes[8], &app_size, 4);  // little-endian app size at offset 8
   write_char(pkt_handle_, sizes, sizeof(sizes), false);
@@ -151,14 +172,14 @@ void DfuClient::send_start_dfu_() {
 }
 
 void DfuClient::send_init_packet_() {
-  ESP_LOGI(TAG, "[DFU] Sending init packet (%u bytes)", dat_data_.size());
+  ESP_LOGI(TAG, "[DFU] Sending init packet (%u bytes)", dat_size_);
 
   // Init DFU parameters - start
   uint8_t cmd_start[2] = {OP_INIT_DFU_PARAMS, 0x00};
   write_char(ctrl_handle_, cmd_start, sizeof(cmd_start), true);
 
   // Write dat contents to packet
-  write_char(pkt_handle_, dat_data_.data(), dat_data_.size(), false);
+  write_char(pkt_handle_, dat_data_, dat_size_, false);
 
   // Init DFU parameters - complete
   uint8_t cmd_complete[2] = {OP_INIT_DFU_PARAMS, 0x01};
@@ -171,16 +192,16 @@ void DfuClient::send_firmware_chunks_() {
   if (waiting_for_notification_) return;
 
   // Send up to RECEIPT_INTERVAL chunks before waiting for receipt
-  while (bytes_sent_ < bin_data_.size() && packets_since_receipt_ < RECEIPT_INTERVAL) {
-    size_t remaining = bin_data_.size() - bytes_sent_;
+  while (bytes_sent_ < bin_size_ && packets_since_receipt_ < RECEIPT_INTERVAL) {
+    size_t remaining = bin_size_ - bytes_sent_;
     size_t chunk_len = remaining < CHUNK_SIZE ? remaining : CHUNK_SIZE;
 
-    write_char(pkt_handle_, bin_data_.data() + bytes_sent_, chunk_len, false);
+    write_char(pkt_handle_, bin_data_ + bytes_sent_, chunk_len, false);
     bytes_sent_ += chunk_len;
     packets_since_receipt_++;
   }
 
-  if (bytes_sent_ >= bin_data_.size()) {
+  if (bytes_sent_ >= bin_size_) {
     // All data sent, wait for final notification
     ESP_LOGI(TAG, "[DFU] All firmware data sent (%u bytes)", bytes_sent_);
     waiting_for_notification_ = true;
@@ -301,8 +322,8 @@ void DfuClient::handle_notification_(const uint8_t *data, size_t len) {
   } else if (data[0] == OP_PKT_RECEIPT_NOTIF && len >= 5) {
     // Packet receipt notification — contains bytes received so far
     uint32_t received = data[1] | (data[2] << 8) | (data[3] << 16) | (data[4] << 24);
-    float pct = bin_data_.size() > 0 ? (float)received / (float)bin_data_.size() * 100.0f : 0.0f;
-    ESP_LOGI(TAG, "[DFU] Progress: %u / %u bytes (%.1f%%)", received, bin_data_.size(), pct);
+    float pct = bin_size_ > 0 ? (float)received / (float)bin_size_ * 100.0f : 0.0f;
+    ESP_LOGI(TAG, "[DFU] Progress: %u / %u bytes (%.1f%%)", received, bin_size_, pct);
     packets_since_receipt_ = 0;
     // Continue sending
     send_firmware_chunks_();

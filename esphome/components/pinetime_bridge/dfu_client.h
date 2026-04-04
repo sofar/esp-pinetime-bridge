@@ -44,9 +44,11 @@ class DfuClient {
   DfuState state_ = DfuState::IDLE;
   const char *error_msg_ = "";
 
-  // Firmware data
-  std::vector<uint8_t> bin_data_;
-  std::vector<uint8_t> dat_data_;
+  // Firmware data (allocated in PSRAM)
+  uint8_t *bin_data_ = nullptr;
+  size_t bin_size_ = 0;
+  uint8_t *dat_data_ = nullptr;
+  size_t dat_size_ = 0;
 
   // BLE handles
   uint16_t ctrl_handle_ = 0;  // Control Point

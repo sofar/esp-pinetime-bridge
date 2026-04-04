@@ -138,7 +138,7 @@ text_sensor:
       if (bridge->is_connected()) {
         return std::string("Connected");
       }
-      if (bridge->get_watch_battery() > 0) {
+      if (bridge->get_paired_address() != 0) {
         return std::string("Paired (disconnected)");
       }
       return std::string("Not paired");

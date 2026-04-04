@@ -778,9 +778,10 @@ async function loadEquipment() {
 
           // Watch section
           let watchParts = [];
+          let watchKnown = s.watch_battery > 0 || s.watch_firmware || s.connected;
           if (s.connected) {
             watchParts.push('<span style="color:#4caf50">Connected</span>');
-          } else if (s.watch_battery > 0) {
+          } else if (watchKnown || user.watch_mac) {
             watchParts.push('<span style="color:#888">Paired (disconnected)</span>');
           } else {
             watchParts.push('<span style="color:#999">Not paired</span>');
