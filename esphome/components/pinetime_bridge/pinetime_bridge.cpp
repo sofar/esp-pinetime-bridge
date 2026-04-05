@@ -136,14 +136,24 @@ void PineTimeBridge::loop() {
     return;
   }
 
-  // After DFU completes, force a reconnect to sync time + reminders to the freshly booted watch
+  // After DFU completes, force a reconnect for time sync only.
+  // Skip reminder sync for 2 minutes — let the freshly booted firmware stabilize.
   if (dfu_client_.state() == DfuState::COMPLETE || dfu_client_.state() == DfuState::FAILED) {
-    ESP_LOGI(TAG, "[DFU] %s — forcing reconnect for time sync + reminder verify",
+    ESP_LOGI(TAG, "[DFU] %s — forcing reconnect for time sync (reminders deferred 2 min)",
              dfu_client_.state() == DfuState::COMPLETE ? "Complete" : "Failed");
-    last_sync_hash_ = 0;
+    post_dfu_ = true;
+    post_dfu_time_ms_ = now;
     needs_ble_sync_ = true;
     last_watch_poll_ms_ = 0;  // trigger immediate watch poll (time sync, battery, steps)
     dfu_client_.reset();
+  }
+
+  // End post-DFU grace period after 2 minutes
+  if (post_dfu_ && post_dfu_time_ms_ > 0 && (now - post_dfu_time_ms_ > 120000)) {
+    ESP_LOGI(TAG, "[DFU] Post-DFU grace period ended, resuming normal reminder sync");
+    post_dfu_ = false;
+    post_dfu_time_ms_ = 0;
+    last_sync_hash_ = 0;  // force full reminder sync on next poll
   }
 
   // Process BLE command queue when connected and services discovered
@@ -155,8 +165,8 @@ void PineTimeBridge::loop() {
   if (now - last_poll_ms_ > poll_interval_ms_) {
     last_poll_ms_ = now;
     poll_api_();
-    // Skip reminder sync if DFU is pending/active — let DFU proceed cleanly
-    if (dfu_client_.state() == DfuState::IDLE) {
+    // Skip reminder sync if DFU is pending/active or post-DFU grace period
+    if (dfu_client_.state() == DfuState::IDLE && !post_dfu_) {
       sync_reminders_to_watch_(); // queues BLE command only if data changed
     }
   }
@@ -532,31 +542,32 @@ void PineTimeBridge::discover_services_() {
     esp_ble_gattc_read_char(client->get_gattc_if(), client->get_conn_id(), chr->handle, ESP_GATT_AUTH_REQ_NONE);
   }
 
-  // DFU Service
-  uint16_t dfu_ctrl = 0, dfu_pkt = 0;
-  auto dfu_svc_uuid = espbt::ESPBTUUID::from_raw(DFU_SERVICE_UUID);
-  auto dfu_ctrl_uuid = espbt::ESPBTUUID::from_raw(DFU_CTRL_UUID);
-  auto dfu_pkt_uuid = espbt::ESPBTUUID::from_raw(DFU_PKT_UUID);
-  chr = client->get_characteristic(dfu_svc_uuid, dfu_ctrl_uuid);
-  if (chr) { dfu_ctrl = chr->handle; ESP_LOGI(TAG, "Found DFU control: 0x%04x", dfu_ctrl); }
-  chr = client->get_characteristic(dfu_svc_uuid, dfu_pkt_uuid);
-  if (chr) { dfu_pkt = chr->handle; ESP_LOGI(TAG, "Found DFU packet: 0x%04x", dfu_pkt); }
-  // DFU Revision (00001534-...)
-  static const uint8_t DFU_REV_UUID[16] = {
-      0x23, 0xd1, 0xbc, 0xea, 0x5f, 0x78, 0x23, 0x15,
-      0xde, 0xef, 0x12, 0x12, 0x34, 0x15, 0x00, 0x00};
-  auto dfu_rev_uuid = espbt::ESPBTUUID::from_raw(DFU_REV_UUID);
-  chr = client->get_characteristic(dfu_svc_uuid, dfu_rev_uuid);
-  if (chr) {
-    dfu_rev_handle_ = chr->handle;
-    ESP_LOGI(TAG, "Found DFU revision: 0x%04x, reading...", chr->handle);
-    esp_ble_gattc_read_char(client->get_gattc_if(), client->get_conn_id(), chr->handle, ESP_GATT_AUTH_REQ_NONE);
-  }
-
-  if (dfu_ctrl && dfu_pkt) {
-    ESP_LOGI(TAG, "DFU service found");
-    // If DFU is in progress, hand off to DFU client
-    if (dfu_client_.state() == DfuState::CONNECTING) {
+  // DFU Service — only discover and interact when a DFU is actively in progress.
+  // Any access to DFU characteristics triggers DfuService::OnServiceData on the
+  // watch, which shows a "firmware update disabled" notification if DFU is off
+  // in settings and can cause unexpected behavior on freshly-booted firmware.
+  if (dfu_client_.state() == DfuState::CONNECTING) {
+    uint16_t dfu_ctrl = 0, dfu_pkt = 0;
+    auto dfu_svc_uuid = espbt::ESPBTUUID::from_raw(DFU_SERVICE_UUID);
+    auto dfu_ctrl_uuid = espbt::ESPBTUUID::from_raw(DFU_CTRL_UUID);
+    auto dfu_pkt_uuid = espbt::ESPBTUUID::from_raw(DFU_PKT_UUID);
+    chr = client->get_characteristic(dfu_svc_uuid, dfu_ctrl_uuid);
+    if (chr) { dfu_ctrl = chr->handle; ESP_LOGI(TAG, "Found DFU control: 0x%04x", dfu_ctrl); }
+    chr = client->get_characteristic(dfu_svc_uuid, dfu_pkt_uuid);
+    if (chr) { dfu_pkt = chr->handle; ESP_LOGI(TAG, "Found DFU packet: 0x%04x", dfu_pkt); }
+    // DFU Revision (00001534-...)
+    static const uint8_t DFU_REV_UUID[16] = {
+        0x23, 0xd1, 0xbc, 0xea, 0x5f, 0x78, 0x23, 0x15,
+        0xde, 0xef, 0x12, 0x12, 0x34, 0x15, 0x00, 0x00};
+    auto dfu_rev_uuid = espbt::ESPBTUUID::from_raw(DFU_REV_UUID);
+    chr = client->get_characteristic(dfu_svc_uuid, dfu_rev_uuid);
+    if (chr) {
+      dfu_rev_handle_ = chr->handle;
+      ESP_LOGI(TAG, "Found DFU revision: 0x%04x, reading...", chr->handle);
+      esp_ble_gattc_read_char(client->get_gattc_if(), client->get_conn_id(), chr->handle, ESP_GATT_AUTH_REQ_NONE);
+    }
+    if (dfu_ctrl && dfu_pkt) {
+      ESP_LOGI(TAG, "DFU service found");
       dfu_client_.on_services_discovered(dfu_ctrl, dfu_pkt);
       return;  // DFU takes over from here
     }
@@ -570,9 +581,12 @@ void PineTimeBridge::discover_services_() {
   if (upload_handle_ != 0 && sync_handle_ != 0) {
     services_discovered_ = true;
     ESP_LOGI(TAG, "Reminder service discovered");
-    // Queue pending reminders now that we have handles (skip if DFU active)
-    if (dfu_client_.state() == DfuState::IDLE) {
+    // Queue pending reminders now that we have handles (skip if DFU active or post-DFU)
+    if (dfu_client_.state() == DfuState::IDLE && !post_dfu_) {
       sync_reminders_to_watch_();
+    } else if (post_dfu_) {
+      ESP_LOGI(TAG, "[DFU] Skipping reminder sync on post-DFU connection, time sync only");
+      ble_work_done_ = true;  // just disconnect after time sync + reads complete
     }
     // Force a poll to send any pending notifications now that we're connected
     last_poll_ms_ = 0;
