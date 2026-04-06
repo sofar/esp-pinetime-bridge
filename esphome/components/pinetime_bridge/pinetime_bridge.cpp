@@ -231,6 +231,7 @@ void PineTimeBridge::loop() {
       if (returned) {
         ESP_LOGI(TAG, "[WATCH] Watch returned — connecting to sync");
         watch_was_away_ = false;
+        watch_returned_event_ = true;
       } else {
         ESP_LOGI(TAG, "[WATCH] Periodic poll — connecting to read battery/steps/time");
       }
@@ -1244,6 +1245,16 @@ void PineTimeBridge::on_ack_notification_(const uint8_t *data, size_t len) {
   std::string path = "/api/users/" + user_id_ + "/acks";
   ESP_LOGI(TAG, "[ACK] Forwarding ack for reminder #%u to server", reminder_id);
   http_post_(path, body);
+
+  // Set event flag for display notification
+  ack_event_ = true;
+  // Find the reminder message for display
+  for (const auto &r : api_reminders_) {
+    if (r.reminder_id == reminder_id) {
+      last_ack_message_ = r.message;
+      break;
+    }
+  }
 }
 
 }  // namespace pinetime_bridge

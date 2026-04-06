@@ -84,6 +84,9 @@ class PineTimeBridge : public Component, public ble_client::BLEClientNode {
   const std::string &get_watch_software() const { return watch_software_; }
 
   bool get_next_reminder(uint8_t &hours, uint8_t &minutes, std::string &message) const;
+  bool watch_just_returned() { bool r = watch_returned_event_; watch_returned_event_ = false; return r; }
+  bool has_pending_ack() { bool r = ack_event_; ack_event_ = false; return r; }
+  std::string last_ack_message() const { return last_ack_message_; }
 
   void on_ble_advertise(uint64_t address, const std::string &name, int rssi);
   void post_discovered_watches_();
@@ -132,6 +135,9 @@ class PineTimeBridge : public Component, public ble_client::BLEClientNode {
   uint32_t last_watch_poll_ms_ = 0;  // when we last connected to read watch data
   uint32_t last_watch_seen_ms_ = 0; // when scanner last saw the watch
   bool watch_was_away_ = false;     // true if watch wasn't seen for >5 min
+  bool watch_returned_event_ = false; // set when watch returns after absence
+  bool ack_event_ = false;           // set when reminder ack received
+  std::string last_ack_message_;     // message text of last acked reminder
   bool post_dfu_ = false;           // true after DFU, skip reminder sync for grace period
   uint32_t post_dfu_time_ms_ = 0;  // when DFU completed, for grace period timing
 

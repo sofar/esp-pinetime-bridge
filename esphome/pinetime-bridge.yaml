@@ -72,6 +72,33 @@ web_server:
   port: 80
   version: 3
 
+font:
+  - file: "gfonts://Roboto"
+    id: roboto_14
+    size: 14
+  - file: "gfonts://Roboto"
+    id: roboto_36
+    size: 36
+  - file: "gfonts://Roboto"
+    id: roboto_72
+    size: 72
+    glyphs: "0123456789: "
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: mdi_120
+    size: 120
+    glyphs:
+      - "\U000F009E"  # bell-ring
+      - "\U000F12A1"  # battery-low
+      - "\U000F04E6"  # sync
+      - "\U000F02DC"  # home
+      - "\U000F048F"  # server-off
+      - "\U000F048D"  # server-network
+      - "\U000F01DA"  # download
+      - "\U000F05E0"  # check-circle
+      - "\U000F0028"  # alert-circle
+      - "\U000F00B1"  # bluetooth-connect
+      - "\U000F11E5"  # bell-check
+
 time:
   - platform: sntp
     id: sntp_time
@@ -83,6 +110,81 @@ button:
   - platform: restart
     id: device_restart
     name: "Device Restart"
+  - platform: template
+    id: test_events
+    name: "Test Event Display"
+    on_press:
+      - script.execute:
+          id: show_event
+          icon: "\U000F009E"
+          text: "Wake up!"
+          color: 0xFFB000
+      - delay: 2s
+      - script.execute:
+          id: show_event
+          icon: "\U000F12A1"
+          text: "Charge watch"
+          color: 0xFFA000
+      - delay: 2s
+      - script.execute:
+          id: show_event
+          icon: "\U000F04E6"
+          text: "Updating reminders"
+          color: 0x2196F3
+      - delay: 2s
+      - script.execute:
+          id: show_event
+          icon: "\U000F02DC"
+          text: "Welcome back"
+          color: 0x4CAF50
+      - delay: 2s
+      - script.execute:
+          id: show_event
+          icon: "\U000F048F"
+          text: "Server down"
+          color: 0xF44336
+      - delay: 2s
+      - script.execute:
+          id: show_event
+          icon: "\U000F048D"
+          text: "Server OK"
+          color: 0x4CAF50
+      - delay: 2s
+      - script.execute:
+          id: show_event
+          icon: "\U000F01DA"
+          text: "Updating watch"
+          color: 0x2196F3
+      - delay: 2s
+      - script.execute:
+          id: show_event
+          icon: "\U000F05E0"
+          text: "Update done"
+          color: 0x4CAF50
+      - delay: 2s
+      - script.execute:
+          id: show_event
+          icon: "\U000F0028"
+          text: "Update failed"
+          color: 0xF44336
+      - delay: 2s
+      - script.execute:
+          id: show_event
+          icon: "\U000F00B1"
+          text: "Watch paired"
+          color: 0x4CAF50
+      - delay: 2s
+      - script.execute:
+          id: show_event
+          icon: "\U000F11E5"
+          text: "Reminder seen"
+          color: 0x4CAF50
+      - delay: 2s
+      - lambda: |-
+          // Return to status page
+          id(event_active) = false;
+          lv_scr_load(id(status_page)->obj);
+          id(display_dimmed) = false;
 
 text_sensor:
   - platform: version
@@ -461,6 +563,38 @@ lvgl:
             text_color: 0x666666
             text_font: montserrat_24
 
+    # Event notification page — full screen, wakes display for 30s
+    - id: event_page
+      bg_color: 0x000000
+      widgets:
+        # Time at top
+        - label:
+            id: lbl_event_time
+            align: TOP_MID
+            y: 10
+            text: "00:00"
+            text_color: 0x888888
+            text_font: roboto_72
+        # Large icon center (shifted down 10% of 448 = ~45px)
+        - label:
+            id: lbl_event_icon
+            align: CENTER
+            y: 25
+            text: ""
+            text_color: 0xFFFFFF
+            text_font: mdi_120
+        # Status text below icon — wraps
+        - label:
+            id: lbl_event_text
+            align: BOTTOM_MID
+            y: -30
+            text: ""
+            text_color: 0xCCCCCC
+            text_font: roboto_36
+            long_mode: WRAP
+            width: 340
+            text_align: CENTER
+
 # Globals for display dimming
 globals:
   - id: display_dimmed
@@ -473,6 +607,55 @@ globals:
     type: uint64_t
     restore_value: true
     initial_value: "0"
+  - id: event_active
+    type: bool
+    initial_value: "false"
+  - id: event_show_time
+    type: uint32_t
+    initial_value: "0"
+  # Previous state for edge detection
+  - id: prev_server_reachable
+    type: bool
+    initial_value: "true"
+  - id: prev_watch_battery
+    type: uint8_t
+    initial_value: "100"
+  - id: prev_reminder_count
+    type: uint8_t
+    initial_value: "0"
+  - id: prev_dfu_state
+    type: uint8_t
+    initial_value: "0"
+  - id: prev_watch_connected
+    type: bool
+    initial_value: "false"
+
+# Show an event on the display: icon (MDI codepoint string), text, color
+script:
+  - id: show_event
+    mode: restart
+    parameters:
+      icon: string
+      text: string
+      color: int
+    then:
+      - lambda: |-
+          // Update event page labels
+          auto time = id(sntp_time).now();
+          if (time.is_valid()) {
+            char buf[6];
+            snprintf(buf, sizeof(buf), "%02d:%02d", time.hour, time.minute);
+            lv_label_set_text(id(lbl_event_time), buf);
+          }
+          lv_label_set_text(id(lbl_event_icon), icon.c_str());
+          lv_obj_set_style_text_color(id(lbl_event_icon), lv_color_hex(color), LV_PART_MAIN);
+          lv_label_set_text(id(lbl_event_text), text.c_str());
+          // Wake display and switch to event page
+          id(main_display)->set_brightness(204);
+          id(display_dimmed) = false;
+          id(event_active) = true;
+          id(event_show_time) = millis();
+          lv_scr_load(id(event_page)->obj);
 
 # Interval to update LVGL labels and handle dimming
 interval:
@@ -496,9 +679,19 @@ interval:
             lv_label_set_text(id(lbl_clock), buf);
           }
 
-          // Auto-dim after 30 seconds of no touch
+          // Auto-dismiss event page after 30 seconds
           uint32_t now = millis();
-          if (!id(display_dimmed) && id(display_last_touch) > 0 && (now - id(display_last_touch) > 30000)) {
+          if (id(event_active) && (now - id(event_show_time) > 30000)) {
+            id(event_active) = false;
+            // Switch back to status page
+            lv_scr_load(id(status_page)->obj);
+            // Dim display
+            id(display_dimmed) = true;
+            id(main_display)->set_brightness(5);
+          }
+
+          // Auto-dim after 30 seconds of no touch (when not showing event)
+          if (!id(event_active) && !id(display_dimmed) && id(display_last_touch) > 0 && (now - id(display_last_touch) > 30000)) {
             id(display_dimmed) = true;
             id(main_display)->set_brightness(5);  // very dim but touch stays alive
           }
@@ -566,6 +759,66 @@ interval:
           // Last sync
           auto sync_str = bridge->get_last_sync_time();
           lv_label_set_text(id(lbl_watch_sync), sync_str.c_str());
+
+          // --- Event detection (edge-triggered) ---
+          bool server_ok = bridge->is_server_reachable();
+          uint8_t rem_count = bridge->get_reminder_count();
+          uint8_t dfu_st = static_cast<uint8_t>(bridge->dfu().state());
+          bool watch_conn = bridge->is_connected();
+
+          // #9 Server unreachable
+          if (!server_ok && id(prev_server_reachable)) {
+            id(show_event)->execute("\U000F048F", "Server down", 0xF44336);
+          }
+          // #10 Server restored
+          if (server_ok && !id(prev_server_reachable)) {
+            id(show_event)->execute("\U000F048D", "Server OK", 0x4CAF50);
+          }
+          id(prev_server_reachable) = server_ok;
+
+          // #2 Watch battery < 60% (only trigger once when crossing threshold)
+          if (bat > 0 && bat < 60 && id(prev_watch_battery) >= 60) {
+            id(show_event)->execute("\U000F12A1", "Charge watch", 0xFFA000);
+          }
+          if (bat > 0) id(prev_watch_battery) = bat;
+
+          // #3 New reminders syncing (count changed)
+          if (rem_count > 0 && rem_count != id(prev_reminder_count) && id(prev_reminder_count) > 0) {
+            id(show_event)->execute("\U000F04E6", "Updating reminders", 0x2196F3);
+          }
+          id(prev_reminder_count) = rem_count;
+
+          // #11 DFU started (state went from 0 to non-zero)
+          if (dfu_st >= 2 && id(prev_dfu_state) < 2) {
+            id(show_event)->execute("\U000F01DA", "Updating watch", 0x2196F3);
+          }
+          // #12 DFU complete
+          if (dfu_st == 9 && id(prev_dfu_state) != 9) {
+            id(show_event)->execute("\U000F05E0", "Update done", 0x4CAF50);
+          }
+          // #13 DFU failed
+          if (dfu_st == 10 && id(prev_dfu_state) != 10) {
+            id(show_event)->execute("\U000F0028", "Update failed", 0xF44336);
+          }
+          id(prev_dfu_state) = dfu_st;
+
+          // #14 Watch paired (just connected after not being connected)
+          if (watch_conn && !id(prev_watch_connected)) {
+            id(show_event)->execute("\U000F00B1", "Watch paired", 0x4CAF50);
+          }
+          id(prev_watch_connected) = watch_conn;
+
+          // #4 User returns
+          if (bridge->watch_just_returned()) {
+            id(show_event)->execute("\U000F02DC", "Welcome back", 0x4CAF50);
+          }
+
+          // #1 & #15 Reminder acknowledged on watch
+          if (bridge->has_pending_ack()) {
+            auto msg = bridge->last_ack_message();
+            if (msg.empty()) msg = "Reminder seen";
+            id(show_event)->execute("\U000F11E5", msg, 0x4CAF50);
+          }
 
 esp32_ble_tracker:
   scan_parameters:
