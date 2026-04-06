@@ -454,8 +454,8 @@ function switchTab(name) {
     el.classList.toggle('active', el.textContent.toLowerCase().startsWith(name.slice(0,3)));
   });
   if (name === 'logs') loadLogs();
-  if (name === 'equipment') loadEquipment();
-  if (name !== 'equipment') stopDiscoveryPoll();
+  if (name === 'equipment') { loadEquipment(); startEquipmentPoll(); }
+  if (name !== 'equipment') { stopDiscoveryPoll(); stopEquipmentPoll(); }
 }
 
 // ---- Reminders ----
@@ -740,6 +740,15 @@ async function loadLogs() {
 }
 
 // ---- Equipment ----
+
+let equipmentTimer = null;
+function startEquipmentPoll() {
+  stopEquipmentPoll();
+  equipmentTimer = setInterval(loadEquipment, 30000);
+}
+function stopEquipmentPoll() {
+  if (equipmentTimer) { clearInterval(equipmentTimer); equipmentTimer = null; }
+}
 
 async function loadEquipment() {
   if (!currentUserId) return;
