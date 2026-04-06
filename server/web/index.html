@@ -293,10 +293,15 @@
     <!-- Watch section -->
     <div class="form-card">
       <div class="section-label" style="font-weight:600; font-size:0.9em; margin-bottom:8px;">Watch</div>
+      <div id="eqWatchStatus" style="font-size:0.85em; color:#666; margin-top:4px;"></div>
+      <div style="margin-top:12px;">
+        <div id="batteryChart" style="width:100%; max-width:480px; height:150px; border:1px solid #ddd; border-radius:4px; overflow:hidden;"></div>
+        <div id="batteryChartLabel" style="font-size:0.75em; color:#999; text-align:center; margin-top:2px;">Battery % — last 30 days</div>
+      </div>
+      <div class="form-divider"></div>
       <div class="form-row">
         <div class="field"><label>MAC Address</label><input id="eqMac" placeholder="AA:BB:CC:DD:EE:FF"></div>
       </div>
-      <div id="eqWatchStatus" style="font-size:0.85em; color:#666; margin-top:4px;"></div>
       <div class="form-divider"></div>
       <div class="section-label">Nearby Watches</div>
       <div id="discoveredList" style="margin-bottom:8px;"><span style="font-size:0.82em; color:#888;">Scanning...</span></div>
@@ -795,7 +800,7 @@ async function loadEquipment() {
             linkEl.style.display = 'none';
           }
 
-          // Watch section
+          // Watch section — battery last (right above chart)
           let watchParts = [];
           let watchKnown = s.watch_battery > 0 || s.watch_firmware || s.connected;
           if (s.connected) {
@@ -805,7 +810,6 @@ async function loadEquipment() {
           } else {
             watchParts.push('<span style="color:#999">Not paired</span>');
           }
-          if (s.watch_battery > 0) watchParts.push('Battery: ' + s.watch_battery + '%');
           if (s.watch_firmware) watchParts.push('Firmware: ' + esc(s.watch_firmware));
           if (s.watch_manufacturer) watchParts.push('Manufacturer: ' + esc(s.watch_manufacturer));
           if (s.watch_software) watchParts.push('Software: ' + esc(s.watch_software));
@@ -815,6 +819,7 @@ async function loadEquipment() {
           } else if (s.watch_battery > 0) {
             watchParts.push('Never synced');
           }
+          if (s.watch_battery > 0) watchParts.push('Battery: ' + s.watch_battery + '%');
           document.getElementById('eqWatchStatus').innerHTML = watchParts.join('<br>');
         }
       } catch(e) {}
@@ -826,6 +831,11 @@ async function loadEquipment() {
 
     // Watch MAC
     document.getElementById('eqMac').value = user.watch_mac || '';
+
+    // Battery chart
+    if (user.bridge_id) {
+      loadBatteryChart(user.bridge_id);
+    }
 
     // Firmware
     loadFirmwareInfo();
@@ -956,6 +966,76 @@ async function loadDiscoveredWatches(bridgeId) {
 
 function stopDiscoveryPoll() {
   if (discoveryTimer) { clearInterval(discoveryTimer); discoveryTimer = null; }
+}
+
+async function loadBatteryChart(bridgeId) {
+  try {
+    const res = await fetch(API + '/api/bridges/' + bridgeId + '/battery-history?days=30');
+    if (!res.ok) return;
+    const points = await res.json();
+    drawBatteryChart(points);
+  } catch(e) {}
+}
+
+function drawBatteryChart(points) {
+  const el = document.getElementById('batteryChart');
+  if (!el) return;
+  const W = 480, H = 150;
+  const pad = {top: 10, right: 10, bottom: 25, left: 35};
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top - pad.bottom;
+
+  if (!points || points.length === 0) {
+    el.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">' +
+      '<text x="'+W/2+'" y="'+H/2+'" text-anchor="middle" fill="#999" font-size="12">No battery data yet</text></svg>';
+    return;
+  }
+
+  const data = points.map(p => ({
+    t: new Date(p.recorded_at).getTime(),
+    v: p.battery
+  }));
+  const tMin = data[0].t, tMax = data[data.length-1].t;
+  const tRange = Math.max(tMax - tMin, 1);
+
+  function tx(t) { return pad.left + ((t - tMin) / tRange) * cw; }
+  function ty(v) { return pad.top + ch - (v / 100) * ch; }
+
+  let svg = '<svg viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg" style="font-family:sans-serif">';
+
+  // Grid lines + Y labels
+  for (let pct = 0; pct <= 100; pct += 25) {
+    const y = ty(pct);
+    svg += '<line x1="'+pad.left+'" y1="'+y+'" x2="'+(pad.left+cw)+'" y2="'+y+'" stroke="#eee" stroke-width="1"/>';
+    svg += '<text x="'+(pad.left-4)+'" y="'+(y+3)+'" text-anchor="end" fill="#999" font-size="10">'+pct+'%</text>';
+  }
+
+  // Date labels
+  const dayMs = 86400000;
+  const startDay = new Date(tMin);
+  startDay.setHours(0,0,0,0);
+  for (let d = startDay.getTime(); d <= tMax; d += dayMs * 7) {
+    const x = tx(d);
+    if (x >= pad.left && x <= pad.left + cw) {
+      const dt = new Date(d);
+      svg += '<text x="'+x+'" y="'+(H-5)+'" text-anchor="middle" fill="#999" font-size="10">'+(dt.getMonth()+1)+'/'+dt.getDate()+'</text>';
+    }
+  }
+
+  // Line path
+  let linePath = '';
+  data.forEach((p, i) => {
+    linePath += (i === 0 ? 'M' : 'L') + tx(p.t).toFixed(1) + ',' + ty(p.v).toFixed(1);
+  });
+  svg += '<path d="'+linePath+'" fill="none" stroke="#4caf50" stroke-width="1.5"/>';
+
+  // Fill under
+  const fillPath = linePath + 'L'+tx(data[data.length-1].t).toFixed(1)+','+(pad.top+ch)+
+    'L'+pad.left+','+(pad.top+ch)+'Z';
+  svg += '<path d="'+fillPath+'" fill="#4caf50" opacity="0.15"/>';
+
+  svg += '</svg>';
+  el.innerHTML = svg;
 }
 
 async function selectWatch(mac) {

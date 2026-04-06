@@ -55,6 +55,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /api/bridges/{id}/status", h.UpdateBridgeStatus)
 	mux.HandleFunc("GET /api/bridges/{id}/status", h.GetBridgeStatus)
+	mux.HandleFunc("GET /api/bridges/{id}/battery-history", h.GetBatteryHistory)
 
 	mux.HandleFunc("POST /api/users/{id}/logs", h.PostLog)
 	mux.HandleFunc("GET /api/users/{id}/logs", h.ListLogs)
@@ -402,6 +403,25 @@ func (h *Handler) GetBridgeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, b)
+}
+
+func (h *Handler) GetBatteryHistory(w http.ResponseWriter, r *http.Request) {
+	bridgeID := r.PathValue("id")
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil && v > 0 && v <= 365 {
+			days = v
+		}
+	}
+	points, err := h.store.GetBatteryHistory(bridgeID, days)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if points == nil {
+		points = []store.BatteryPoint{}
+	}
+	writeJSON(w, http.StatusOK, points)
 }
 
 // Firmware

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"time"
 
@@ -69,6 +70,13 @@ CREATE TABLE IF NOT EXISTS logs (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_logs_user_created ON logs(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS battery_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bridge_id TEXT NOT NULL,
+    battery INTEGER NOT NULL,
+    recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_battery_bridge_time ON battery_history(bridge_id, recorded_at DESC);
 `
 
 type Store struct {
@@ -256,7 +264,41 @@ func (s *Store) UpdateBridgeStatus(b *models.BridgeStatus) error {
 		   last_heartbeat=CURRENT_TIMESTAMP`,
 		b.BridgeID, b.Connected, b.WatchBattery, b.WatchFirmware, b.WatchManufacturer, b.WatchSoftware, b.WatchSteps, b.LastSync, b.BridgeIP,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	// Record battery history (only if battery > 0, i.e. watch is reporting)
+	if b.WatchBattery > 0 {
+		s.db.Exec(`INSERT INTO battery_history (bridge_id, battery) VALUES (?, ?)`, b.BridgeID, b.WatchBattery)
+	}
+	return nil
+}
+
+type BatteryPoint struct {
+	RecordedAt time.Time `json:"recorded_at"`
+	Battery    uint8     `json:"battery"`
+}
+
+func (s *Store) GetBatteryHistory(bridgeID string, days int) ([]BatteryPoint, error) {
+	rows, err := s.db.Query(
+		`SELECT battery, recorded_at FROM battery_history
+		 WHERE bridge_id = ? AND recorded_at > datetime('now', ?)
+		 ORDER BY recorded_at ASC`,
+		bridgeID, fmt.Sprintf("-%d days", days),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var points []BatteryPoint
+	for rows.Next() {
+		var p BatteryPoint
+		if err := rows.Scan(&p.Battery, &p.RecordedAt); err != nil {
+			continue
+		}
+		points = append(points, p)
+	}
+	return points, nil
 }
 
 func (s *Store) GetBridgeStatus(bridgeID string) (*models.BridgeStatus, error) {
