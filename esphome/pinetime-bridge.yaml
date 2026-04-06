@@ -91,11 +91,12 @@ text_sensor:
   - platform: wifi_info
     ip_address:
       name: "IP Address"
+  # -- Slow: rarely changes (5 min) --
   - platform: template
     id: bridge_watch_firmware
     name: "Watch Firmware"
     icon: "mdi:cellphone-arrow-down"
-    update_interval: 30s
+    update_interval: 300s
     lambda: |-
       auto fw = id(pinetime_bridge_id)->get_watch_firmware();
       return fw.empty() ? std::string("Unknown") : fw;
@@ -103,7 +104,7 @@ text_sensor:
     id: bridge_watch_manufacturer
     name: "Watch Manufacturer"
     icon: "mdi:factory"
-    update_interval: 60s
+    update_interval: 300s
     lambda: |-
       auto m = id(pinetime_bridge_id)->get_watch_manufacturer();
       return m.empty() ? std::string("Unknown") : m;
@@ -111,14 +112,14 @@ text_sensor:
     id: bridge_watch_software
     name: "Watch Software"
     icon: "mdi:application"
-    update_interval: 60s
+    update_interval: 300s
     lambda: |-
       auto s = id(pinetime_bridge_id)->get_watch_software();
       return s.empty() ? std::string("Unknown") : s;
   - platform: template
     id: bridge_connected_mac
     name: "Connected Watch"
-    update_interval: 30s
+    update_interval: 300s
     lambda: |-
       auto *bridge = id(pinetime_bridge_id);
       auto addr = bridge->parent()->get_address();
@@ -128,11 +129,12 @@ text_sensor:
         (uint8_t)(addr >> 40), (uint8_t)(addr >> 32), (uint8_t)(addr >> 24),
         (uint8_t)(addr >> 16), (uint8_t)(addr >> 8), (uint8_t)(addr));
       return std::string(buf);
+  # -- Fast: connection state matters (15s) --
   - platform: template
     id: bridge_watch_status
     name: "Watch BLE Status"
     icon: "mdi:bluetooth-connect"
-    update_interval: 30s
+    update_interval: 15s
     lambda: |-
       auto *bridge = id(pinetime_bridge_id);
       if (bridge->is_connected()) {
@@ -143,24 +145,25 @@ text_sensor:
       }
       return std::string("Not paired");
   - platform: template
-    id: bridge_last_sync
-    name: "Last Reminder Sync"
-    icon: "mdi:sync"
-    update_interval: 30s
-    lambda: |-
-      return id(pinetime_bridge_id)->get_last_sync_time();
-  - platform: template
     id: bridge_server_status
     name: "Server Status"
     icon: "mdi:server-network"
-    update_interval: 30s
+    update_interval: 15s
     lambda: |-
       return id(pinetime_bridge_id)->is_server_reachable() ? std::string("Reachable") : std::string("Unreachable");
+  # -- Medium: changes after sync events (60s) --
+  - platform: template
+    id: bridge_last_sync
+    name: "Last Reminder Sync"
+    icon: "mdi:sync"
+    update_interval: 60s
+    lambda: |-
+      return id(pinetime_bridge_id)->get_last_sync_time();
   - platform: template
     id: bridge_next_reminder
     name: "Next Reminder"
     icon: "mdi:bell-ring"
-    update_interval: 30s
+    update_interval: 60s
     lambda: |-
       auto *bridge = id(pinetime_bridge_id);
       uint8_t h, m;
@@ -173,22 +176,29 @@ text_sensor:
       return std::string("None");
 
 sensor:
+  # -- Slow: diagnostic (5 min) --
   - platform: uptime
     name: Uptime
     id: device_uptime
     entity_category: diagnostic
     accuracy_decimals: 0
     unit_of_measurement: min
-    update_interval: 60s
+    update_interval: 300s
     filters:
       - lambda: return x / 60;
+  - platform: wifi_signal
+    name: WiFi Signal
+    id: device_wifi_signal
+    entity_category: diagnostic
+    update_interval: 300s
+  # -- Medium: changes slowly (60s) --
   - platform: template
     id: watch_battery_sensor
     name: "Watch Battery"
     unit_of_measurement: "%"
     device_class: battery
     accuracy_decimals: 0
-    update_interval: 30s
+    update_interval: 60s
     lambda: |-
       return id(pinetime_bridge_id)->get_watch_battery();
   - platform: template
@@ -196,7 +206,7 @@ sensor:
     name: "Watch Steps"
     icon: "mdi:walk"
     accuracy_decimals: 0
-    update_interval: 30s
+    update_interval: 60s
     lambda: |-
       return id(pinetime_bridge_id)->get_watch_steps();
   - platform: template
@@ -204,14 +214,9 @@ sensor:
     name: "Reminder Count"
     icon: "mdi:bell-badge"
     accuracy_decimals: 0
-    update_interval: 30s
+    update_interval: 60s
     lambda: |-
       return id(pinetime_bridge_id)->get_reminder_count();
-  - platform: wifi_signal
-    name: WiFi Signal
-    id: device_wifi_signal
-    entity_category: diagnostic
-    update_interval: 60s
 
 binary_sensor:
   - platform: status
