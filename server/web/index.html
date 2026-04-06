@@ -453,7 +453,8 @@ function switchTab(name) {
   document.querySelectorAll('.tab').forEach(el => {
     el.classList.toggle('active', el.textContent.toLowerCase().startsWith(name.slice(0,3)));
   });
-  if (name === 'logs') loadLogs();
+  if (name === 'logs') { loadLogs(); startLogsPoll(); }
+  if (name !== 'logs') stopLogsPoll();
   if (name === 'equipment') { loadEquipment(); startEquipmentPoll(); }
   if (name !== 'equipment') { stopDiscoveryPoll(); stopEquipmentPoll(); }
 }
@@ -720,6 +721,15 @@ async function sendNotify() {
 }
 
 // ---- Logs ----
+
+let logsTimer = null;
+function startLogsPoll() {
+  stopLogsPoll();
+  logsTimer = setInterval(loadLogs, 10000);
+}
+function stopLogsPoll() {
+  if (logsTimer) { clearInterval(logsTimer); logsTimer = null; }
+}
 
 async function loadLogs() {
   if (!currentUserId) return;
