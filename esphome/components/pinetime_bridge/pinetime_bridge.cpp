@@ -240,8 +240,8 @@ void PineTimeBridge::loop() {
     }
   }
 
-  // Periodic heartbeat (every 5 minutes)
-  if (now - last_heartbeat_ms_ > 300000) {
+  // Periodic heartbeat (every 60 seconds)
+  if (now - last_heartbeat_ms_ > 60000) {
     last_heartbeat_ms_ = now;
     send_heartbeat_();
   }
