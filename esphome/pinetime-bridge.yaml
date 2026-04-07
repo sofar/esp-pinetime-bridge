@@ -629,6 +629,9 @@ globals:
   - id: prev_watch_connected
     type: bool
     initial_value: "false"
+  - id: last_battery_warn_ms
+    type: uint32_t
+    initial_value: "0"
 
 # Show an event on the display: icon (MDI codepoint string), text, color
 script:
@@ -776,9 +779,18 @@ interval:
           }
           id(prev_server_reachable) = server_ok;
 
-          // #2 Watch battery < 60% (only trigger once when crossing threshold)
-          if (bat > 0 && bat < 60 && id(prev_watch_battery) >= 60) {
-            id(show_event)->execute("\U000F12A1", "Charge watch", 0xFFA000);
+          // #2 Watch battery < 60% — repeat every 60 min during 8am-8pm
+          if (bat > 0 && bat < 60) {
+            auto time = id(sntp_time).now();
+            bool daytime = time.is_valid() && time.hour >= 8 && time.hour < 20;
+            bool first_cross = id(prev_watch_battery) >= 60;
+            bool repeat_due = (millis() - id(last_battery_warn_ms) > 3600000UL);
+            if (first_cross || (daytime && repeat_due)) {
+              id(show_event)->execute("\U000F12A1", "Charge watch", 0xFFA000);
+              id(last_battery_warn_ms) = millis();
+            }
+          } else {
+            id(last_battery_warn_ms) = 0;  // reset when battery is OK
           }
           if (bat > 0) id(prev_watch_battery) = bat;
 
