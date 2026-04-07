@@ -205,16 +205,16 @@ void PineTimeBridge::loop() {
     ble_connect_time_ms_ = 0;
   }
 
-  // Post discovered watches to server every 10 seconds
-  if (now - last_discovery_post_ms_ > 10000) {
+  // Post discovered watches to server every 60 seconds
+  if (now - last_discovery_post_ms_ > 60000) {
     last_discovery_post_ms_ = now;
     post_discovered_watches_();
   }
 
-  // Pairing: poll server — fast (3s) when pairing active, slow (10s) otherwise
+  // Pairing: poll server — fast (3s) when pairing active, slow (60s) otherwise
   {
     static uint32_t last_pair_poll = 0;
-    uint32_t pair_interval = (passkey_pending_ || pairing_in_progress_) ? 3000 : 10000;
+    uint32_t pair_interval = (passkey_pending_ || pairing_in_progress_) ? 3000 : 60000;
     if (now - last_pair_poll > pair_interval) {
       last_pair_poll = now;
       check_pairing_request_();
