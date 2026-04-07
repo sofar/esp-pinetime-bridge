@@ -294,6 +294,15 @@ sensor:
     lambda: |-
       return id(pinetime_bridge_id)->get_watch_steps();
   - platform: template
+    id: watch_uptime_sensor
+    name: "Watch Uptime"
+    icon: "mdi:timer-outline"
+    unit_of_measurement: "min"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: |-
+      return id(pinetime_bridge_id)->get_watch_uptime() / 60;
+  - platform: template
     id: reminder_count_sensor
     name: "Reminder Count"
     icon: "mdi:bell-badge"
