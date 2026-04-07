@@ -484,7 +484,7 @@ async function loadReminders() {
   if (!currentUserId) return;
   const res = await fetch(API + '/api/users/' + currentUserId + '/reminders');
   cachedReminders = await res.json();
-  document.getElementById('reminderCountText').textContent = 'Reminders: ' + cachedReminders.length + ' / 56';
+  document.getElementById('reminderCountText').textContent = 'Reminders: ' + cachedReminders.length + ' / 10';
   const list = document.getElementById('reminderList');
   if (!cachedReminders.length) {
     list.innerHTML = '<div class="empty">No reminders yet</div>';
