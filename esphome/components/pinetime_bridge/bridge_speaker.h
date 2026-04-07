@@ -16,6 +16,7 @@ static i2s_chan_handle_t tx_handle_ = NULL;
 static SemaphoreHandle_t mutex_ = NULL;
 static bool ready_ = false;
 static int pending_tone_id_ = -1;
+static uint8_t volume_ = 50;  // 0-100%, default 50%
 
 static void init() {
   // Enable PA
@@ -66,9 +67,11 @@ static void play_mono_pcm(const uint8_t *data, size_t len) {
   }
 
   const int16_t *mono = (const int16_t *)data;
+  float gain = (float)volume_ / 100.0f;
   for (size_t i = 0; i < num_samples; i++) {
-    stereo[i * 2] = mono[i];
-    stereo[i * 2 + 1] = mono[i];
+    int16_t scaled = (int16_t)((float)mono[i] * gain);
+    stereo[i * 2] = scaled;
+    stereo[i * 2 + 1] = scaled;
   }
 
   size_t bytes_written = 0;
@@ -91,6 +94,22 @@ static void play_task_(void *arg) {
 static void play_event_tone(int tone_id) {
   if (!ready_) return;
   xTaskCreate(play_task_, "spk", 4096, (void *)(intptr_t)tone_id, 5, NULL);
+}
+
+static uint8_t get_volume() { return volume_; }
+
+static void set_volume(uint8_t vol) {
+  if (vol > 100) vol = 100;
+  volume_ = vol;
+  ESP_LOGI(TAG, "Volume: %u%%", volume_);
+}
+
+static void volume_up() {
+  set_volume(volume_ <= 90 ? volume_ + 10 : 100);
+}
+
+static void volume_down() {
+  set_volume(volume_ >= 10 ? volume_ - 10 : 0);
 }
 
 }  // namespace bridge_speaker

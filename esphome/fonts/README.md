@@ -32,3 +32,4 @@ curl -sL "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/
 | `\U000F0028` | alert-circle | DFU failed |
 | `\U000F00B1` | bluetooth-connect | Watch paired |
 | `\U000F11E5` | bell-check | Reminder acknowledged |
+| `\U000F0580` | volume-medium | Volume control |

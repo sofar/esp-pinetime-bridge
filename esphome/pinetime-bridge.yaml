@@ -110,6 +110,7 @@ font:
       - "\U000F0028"  # alert-circle
       - "\U000F00B1"  # bluetooth-connect
       - "\U000F11E5"  # bell-check
+      - "\U000F0580"  # volume-medium
 
 time:
   - platform: sntp
@@ -414,8 +415,7 @@ touchscreen:
           // Wake display on touch
           id(display_dimmed) = false;
           id(display_last_touch) = millis();
-          auto disp = id(main_display);
-          disp->set_brightness(204);  // 80%
+          id(main_display)->set_brightness(204);
 
 # LVGL UI
 lvgl:
@@ -426,6 +426,18 @@ lvgl:
   pages:
     - id: status_page
       bg_color: 0x000000
+      on_swipe_up:
+        - lambda: |-
+            esphome::bridge_speaker::volume_up();
+            char buf[16];
+            snprintf(buf, sizeof(buf), "Volume: %u%%", esphome::bridge_speaker::get_volume());
+            id(show_event)->execute("\U000F0580", std::string(buf), 0xFFFFFF, 2);
+      on_swipe_down:
+        - lambda: |-
+            esphome::bridge_speaker::volume_down();
+            char buf[16];
+            snprintf(buf, sizeof(buf), "Volume: %u%%", esphome::bridge_speaker::get_volume());
+            id(show_event)->execute("\U000F0580", std::string(buf), 0xFFFFFF, 2);
       widgets:
         # Title
         - label:
@@ -546,6 +558,18 @@ lvgl:
     # Event notification page — full screen, wakes display for 30s
     - id: event_page
       bg_color: 0x000000
+      on_swipe_up:
+        - lambda: |-
+            esphome::bridge_speaker::volume_up();
+            char buf[16];
+            snprintf(buf, sizeof(buf), "Volume: %u%%", esphome::bridge_speaker::get_volume());
+            id(show_event)->execute("\U000F0580", std::string(buf), 0xFFFFFF, 2);
+      on_swipe_down:
+        - lambda: |-
+            esphome::bridge_speaker::volume_down();
+            char buf[16];
+            snprintf(buf, sizeof(buf), "Volume: %u%%", esphome::bridge_speaker::get_volume());
+            id(show_event)->execute("\U000F0580", std::string(buf), 0xFFFFFF, 2);
       widgets:
         # Time at top
         - label:
@@ -612,6 +636,15 @@ globals:
   - id: last_battery_warn_ms
     type: uint32_t
     initial_value: "0"
+  - id: touch_start_y
+    type: int
+    initial_value: "-1"
+  - id: touch_start_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: touch_last_y
+    type: int
+    initial_value: "0"
 
 # Show an event on the display: icon (MDI codepoint string), text, color
 script:
@@ -641,7 +674,7 @@ script:
           id(event_show_time) = millis();
           lv_scr_load(id(event_page)->obj);
       - lambda: |-
-          esphome::bridge_speaker::play_event_tone(tone_id);
+          if (tone_id >= 0) esphome::bridge_speaker::play_event_tone(tone_id);
       - delay: 1s
 
 # Interval to update LVGL labels and handle dimming
@@ -682,6 +715,7 @@ interval:
             id(display_dimmed) = true;
             id(main_display)->set_brightness(5);  // very dim but touch stays alive
           }
+
   - interval: 10s
     then:
       - lambda: |-
