@@ -173,44 +173,44 @@ void PineTimeBridge::loop() {
   if (now - last_poll_ms_ > poll_interval_ms_) {
     last_poll_ms_ = now;
     poll_api_();
-    // Skip reminder sync if DFU is pending/active or post-DFU grace period
+    // Sync reminders if connected and data changed (skip during DFU/post-DFU)
     if (dfu_client_.state() == DfuState::IDLE && !post_dfu_) {
       sync_reminders_to_watch_(); // queues BLE command only if data changed
     }
   }
 
-  // If we have pending BLE work and aren't connected, connect (skip during DFU)
-  if (needs_ble_sync_ && !ble_connected_ && paired_address_ != 0 && dfu_client_.state() == DfuState::IDLE) {
-    ESP_LOGI(TAG, "[BLE] Connecting to watch for sync...");
-    this->parent()->set_enabled(true);
-    this->parent()->set_state(espbt::ClientState::CONNECTING);
-    esp_bd_addr_t bda;
-    bda[0] = (paired_address_ >> 40) & 0xFF;
-    bda[1] = (paired_address_ >> 32) & 0xFF;
-    bda[2] = (paired_address_ >> 24) & 0xFF;
-    bda[3] = (paired_address_ >> 16) & 0xFF;
-    bda[4] = (paired_address_ >> 8) & 0xFF;
-    bda[5] = paired_address_ & 0xFF;
-    esp_ble_gattc_open(this->parent()->get_gattc_if(), bda, BLE_ADDR_TYPE_RANDOM, true);
-    ble_connect_time_ms_ = now;
-    needs_ble_sync_ = false;  // clear so we don't keep re-requesting
+  // Persistent BLE connection — connect if paired and not connected
+  if (!ble_connected_ && paired_address_ != 0 && !pairing_in_progress_ && dfu_client_.state() == DfuState::IDLE) {
+    // Reconnect with backoff: wait 5 seconds between attempts
+    if (now - ble_connect_time_ms_ > 5000) {
+      ESP_LOGI(TAG, "[BLE] Connecting to watch...");
+      this->parent()->set_enabled(true);
+      this->parent()->set_state(espbt::ClientState::CONNECTING);
+      esp_bd_addr_t bda;
+      bda[0] = (paired_address_ >> 40) & 0xFF;
+      bda[1] = (paired_address_ >> 32) & 0xFF;
+      bda[2] = (paired_address_ >> 24) & 0xFF;
+      bda[3] = (paired_address_ >> 16) & 0xFF;
+      bda[4] = (paired_address_ >> 8) & 0xFF;
+      bda[5] = paired_address_ & 0xFF;
+      esp_ble_gattc_open(this->parent()->get_gattc_if(), bda, BLE_ADDR_TYPE_RANDOM, true);
+      ble_connect_time_ms_ = now;
+    }
   }
 
-  // After sync completes and command queue is drained, disconnect
-  if (ble_connected_ && command_queue_.empty() && !ble_busy_ && ble_work_done_) {
-    ESP_LOGI(TAG, "[BLE] Sync complete, disconnecting to save watch battery");
-    esp_ble_gattc_close(this->parent()->get_gattc_if(), this->parent()->get_conn_id());
-    this->parent()->set_enabled(false);
-    ble_work_done_ = false;
-  }
-
-  // Safety: disconnect after 30 seconds if still connected
-  if (ble_connected_ && ble_connect_time_ms_ > 0 && (now - ble_connect_time_ms_ > 30000)) {
-    ESP_LOGW(TAG, "[BLE] Connection timeout, forcing disconnect");
-    esp_ble_gattc_close(this->parent()->get_gattc_if(), this->parent()->get_conn_id());
-    this->parent()->set_enabled(false);
-    ble_work_done_ = false;
-    ble_connect_time_ms_ = 0;
+  // Periodic watch data refresh — read battery/steps over existing connection
+  if (ble_connected_ && services_discovered_ && command_queue_.empty() && !ble_busy_) {
+    static constexpr uint32_t WATCH_READ_INTERVAL_MS = 5 * 60 * 1000UL;  // every 5 min
+    if (now - last_watch_poll_ms_ > WATCH_READ_INTERVAL_MS) {
+      last_watch_poll_ms_ = now;
+      // Re-read battery, steps, uptime over existing connection
+      if (battery_handle_) esp_ble_gattc_read_char(this->parent()->get_gattc_if(), this->parent()->get_conn_id(), battery_handle_, ESP_GATT_AUTH_REQ_NONE);
+      if (steps_handle_) esp_ble_gattc_read_char(this->parent()->get_gattc_if(), this->parent()->get_conn_id(), steps_handle_, ESP_GATT_AUTH_REQ_NONE);
+      if (status_handle_) esp_ble_gattc_read_char(this->parent()->get_gattc_if(), this->parent()->get_conn_id(), status_handle_, ESP_GATT_AUTH_REQ_NONE);
+      // Re-sync time
+      if (cts_handle_) sync_time_();
+      ESP_LOGI(TAG, "[WATCH] Periodic refresh (battery/steps/uptime/time)");
+    }
   }
 
   // Post discovered watches to server every 60 seconds
@@ -226,25 +226,6 @@ void PineTimeBridge::loop() {
     if (now - last_pair_poll > pair_interval) {
       last_pair_poll = now;
       check_pairing_request_();
-    }
-  }
-
-  // Periodic watch poll — every 30 minutes, connect to read battery/steps/sync time
-  static constexpr uint32_t WATCH_POLL_INTERVAL_MS = 30 * 60 * 1000UL;
-  if (paired_address_ != 0 && !ble_connected_ && !pairing_in_progress_ && dfu_client_.state() == DfuState::IDLE) {
-    bool periodic = (now - last_watch_poll_ms_ > WATCH_POLL_INTERVAL_MS);
-    bool returned = watch_was_away_;
-
-    if (periodic || returned) {
-      if (returned) {
-        ESP_LOGI(TAG, "[WATCH] Watch returned — connecting to sync");
-        watch_was_away_ = false;
-        watch_returned_event_ = true;
-      } else {
-        ESP_LOGI(TAG, "[WATCH] Periodic poll — connecting to read battery/steps/time");
-      }
-      needs_ble_sync_ = true;
-      last_watch_poll_ms_ = now;
     }
   }
 
@@ -273,16 +254,16 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
       break;
 
     case ESP_GATTC_DISCONNECT_EVT:
-      ESP_LOGW(TAG, "Disconnected from PineTime");
+      ESP_LOGW(TAG, "Disconnected from PineTime — will reconnect");
       remote_log_("bridge", "info", "BLE disconnected from watch");
       ble_connected_ = false;
       services_discovered_ = false;
+      ble_connect_time_ms_ = millis();  // start reconnect backoff from now
       // If commands were still pending, reset hash so next connection retries the full sync
       if (!command_queue_.empty() || pending_writes_ > 0) {
         ESP_LOGW(TAG, "[SYNC] Disconnected with %u queued + %u pending writes — will retry sync",
                  command_queue_.size(), pending_writes_);
         last_sync_hash_ = 0;
-        // Clear stale queue — partial sync leaves watch inconsistent, need full retry
         while (!command_queue_.empty()) command_queue_.pop();
       }
       pending_writes_ = 0;
@@ -337,8 +318,7 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
                                    list_handle_, ESP_GATT_AUTH_REQ_NONE);
           break;  // Wait for read response before marking done
         }
-        ESP_LOGI(TAG, "[BLE] All commands sent, ready to disconnect");
-        ble_work_done_ = true;
+        ESP_LOGI(TAG, "[BLE] All commands sent");
         // Record sync time
         auto t = ::time(nullptr);
         struct tm *tm = ::localtime(&t);
@@ -400,8 +380,7 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
             ESP_LOGW(TAG, "[SYNC] Mismatch: watch has %u, expected %u", watch_count, expected);
             remote_log_("bridge", "warn", "Sync mismatch: watch count differs");
           }
-          // Now mark sync done
-          ble_work_done_ = true;
+          // Record sync time
           auto t = ::time(nullptr);
           struct tm *tmm = ::localtime(&t);
           char tbuf[32];
@@ -608,15 +587,11 @@ void PineTimeBridge::discover_services_() {
       sync_reminders_to_watch_();
     } else if (post_dfu_) {
       ESP_LOGI(TAG, "[DFU] Skipping reminder sync on post-DFU connection, time sync only");
-      ble_work_done_ = true;  // just disconnect after time sync + reads complete
     }
-    // Force a poll to send any pending notifications now that we're connected
+    // Force a poll to send any pending notifications
     last_poll_ms_ = 0;
   } else {
     ESP_LOGW(TAG, "Reminder service NOT found on watch");
-    ble_connect_time_ms_ = millis();
-    needs_ble_sync_ = false;
-    ble_work_done_ = false;
   }
 }
 
@@ -797,13 +772,11 @@ void PineTimeBridge::on_ble_advertise(uint64_t address, const std::string &name,
   uint32_t now = millis();
   std::string mac = mac_to_string(address);
 
-  // Track paired watch presence
+  // Track paired watch presence (for "welcome back" event detection)
   if (address == paired_address_ && paired_address_ != 0) {
     if (last_watch_seen_ms_ > 0 && (now - last_watch_seen_ms_ > 300000)) {
-      // Watch was away for >5 minutes, just came back
-      ESP_LOGI(TAG, "[SCAN] Paired watch returned after absence, triggering sync");
-      watch_was_away_ = true;
-      needs_ble_sync_ = true;
+      ESP_LOGI(TAG, "[SCAN] Paired watch returned after absence");
+      watch_returned_event_ = true;
     }
     last_watch_seen_ms_ = now;
   }
@@ -1119,9 +1092,7 @@ void PineTimeBridge::sync_reminders_to_watch_() {
 
   // Only queue the BLE commands if we have handles (connected)
   if (upload_handle_ == 0) {
-    ESP_LOGI(TAG, "[SYNC] Not connected yet, will sync after connection");
-    needs_ble_sync_ = true;
-    ble_work_done_ = false;
+    ESP_LOGD(TAG, "[SYNC] Not connected yet, will sync after connection");
     return;  // Don't update hash — sync hasn't happened yet
   }
 
