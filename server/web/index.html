@@ -814,6 +814,11 @@ async function loadEquipment() {
           if (s.watch_manufacturer) watchParts.push('Manufacturer: ' + esc(s.watch_manufacturer));
           if (s.watch_software) watchParts.push('Software: ' + esc(s.watch_software));
           if (s.watch_steps > 0) watchParts.push('Steps: ' + s.watch_steps);
+          if (s.watch_uptime > 0) {
+            let h = Math.floor(s.watch_uptime / 3600);
+            let m = Math.floor((s.watch_uptime % 3600) / 60);
+            watchParts.push('Uptime: ' + h + 'h ' + m + 'm');
+          }
           if (s.last_sync) {
             watchParts.push('Last sync: ' + fmtTime(s.last_sync));
           } else if (s.watch_battery > 0) {

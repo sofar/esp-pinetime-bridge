@@ -283,6 +283,7 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
       list_handle_ = 0;
       ack_handle_ = 0;
       sync_handle_ = 0;
+      status_handle_ = 0;
       ans_handle_ = 0;
       cts_handle_ = 0;
       battery_handle_ = 0;
@@ -375,6 +376,11 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
         } else if (h == serial_handle_) {
           watch_serial_ = std::string((char *)param->read.value, param->read.value_len);
           ESP_LOGI(TAG, "[WATCH] Serial: %s", watch_serial_.c_str());
+        } else if (h == status_handle_ && param->read.value_len >= 4) {
+          watch_uptime_ = param->read.value[0] | (param->read.value[1] << 8) |
+                          (param->read.value[2] << 16) | (param->read.value[3] << 24);
+          ESP_LOGI(TAG, "[WATCH] Uptime: %u s (%u h %u m)", watch_uptime_,
+                   watch_uptime_ / 3600, (watch_uptime_ % 3600) / 60);
         } else if (h == list_handle_) {
           // Sync verification read-back
           uint8_t watch_count = param->read.value[0];
@@ -464,6 +470,13 @@ void PineTimeBridge::discover_services_() {
 
   chr = client->get_characteristic(svc_uuid, make_reminder_uuid(0x05, 0x00));
   if (chr) { sync_handle_ = chr->handle; ESP_LOGI(TAG, "Found sync char: 0x%04x", sync_handle_); }
+
+  chr = client->get_characteristic(svc_uuid, make_reminder_uuid(0x06, 0x00));
+  if (chr) {
+    status_handle_ = chr->handle;
+    ESP_LOGI(TAG, "Found status char: 0x%04x, reading...", chr->handle);
+    esp_ble_gattc_read_char(client->get_gattc_if(), client->get_conn_id(), chr->handle, ESP_GATT_AUTH_REQ_NONE);
+  }
 
   // ANS (0x1811) — for one-off notifications
   auto ans_svc = espbt::ESPBTUUID::from_uint16(ANS_SERVICE_UUID);
@@ -1143,7 +1156,7 @@ void PineTimeBridge::send_heartbeat_() {
   char body[512];
   snprintf(body, sizeof(body),
            "{\"connected\":%s,\"watch_battery\":%u,\"last_sync\":\"%s\",\"bridge_ip\":\"%s\","
-           "\"watch_firmware\":\"%s\",\"watch_manufacturer\":\"%s\",\"watch_software\":\"%s\",\"watch_steps\":%u}",
+           "\"watch_firmware\":\"%s\",\"watch_manufacturer\":\"%s\",\"watch_software\":\"%s\",\"watch_steps\":%u,\"watch_uptime\":%u}",
            watch_seen ? "true" : "false",
            watch_battery_,
            last_sync_time_.c_str(),
@@ -1151,7 +1164,8 @@ void PineTimeBridge::send_heartbeat_() {
            watch_firmware_.c_str(),
            watch_manufacturer_.c_str(),
            watch_software_.c_str(),
-           watch_steps_);
+           watch_steps_,
+           watch_uptime_);
 
   std::string path = "/api/bridges/" + bridge_id_ + "/status";
   http_post_(path, body);

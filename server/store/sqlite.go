@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS bridge_status (
     watch_manufacturer TEXT DEFAULT '',
     watch_software TEXT DEFAULT '',
     watch_steps INTEGER DEFAULT 0,
+    watch_uptime INTEGER DEFAULT 0,
     last_sync TEXT DEFAULT '',
     bridge_ip TEXT DEFAULT '',
     last_heartbeat DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -251,18 +252,19 @@ func (s *Store) ListAcks(userID int64) ([]models.ReminderAck, error) {
 
 func (s *Store) UpdateBridgeStatus(b *models.BridgeStatus) error {
 	_, err := s.db.Exec(
-		`INSERT INTO bridge_status (bridge_id, connected, watch_battery, watch_firmware, watch_manufacturer, watch_software, watch_steps, last_sync, bridge_ip, last_heartbeat)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		`INSERT INTO bridge_status (bridge_id, connected, watch_battery, watch_firmware, watch_manufacturer, watch_software, watch_steps, watch_uptime, last_sync, bridge_ip, last_heartbeat)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		 ON CONFLICT(bridge_id) DO UPDATE SET
 		   connected=excluded.connected, watch_battery=excluded.watch_battery,
 		   watch_firmware=CASE WHEN excluded.watch_firmware != '' THEN excluded.watch_firmware ELSE bridge_status.watch_firmware END,
 		   watch_manufacturer=CASE WHEN excluded.watch_manufacturer != '' THEN excluded.watch_manufacturer ELSE bridge_status.watch_manufacturer END,
 		   watch_software=CASE WHEN excluded.watch_software != '' THEN excluded.watch_software ELSE bridge_status.watch_software END,
 		   watch_steps=excluded.watch_steps,
+		   watch_uptime=excluded.watch_uptime,
 		   last_sync=CASE WHEN excluded.last_sync != '' THEN excluded.last_sync ELSE bridge_status.last_sync END,
 		   bridge_ip=CASE WHEN excluded.bridge_ip != '' THEN excluded.bridge_ip ELSE bridge_status.bridge_ip END,
 		   last_heartbeat=CURRENT_TIMESTAMP`,
-		b.BridgeID, b.Connected, b.WatchBattery, b.WatchFirmware, b.WatchManufacturer, b.WatchSoftware, b.WatchSteps, b.LastSync, b.BridgeIP,
+		b.BridgeID, b.Connected, b.WatchBattery, b.WatchFirmware, b.WatchManufacturer, b.WatchSoftware, b.WatchSteps, b.WatchUptime, b.LastSync, b.BridgeIP,
 	)
 	if err != nil {
 		return err
@@ -303,8 +305,8 @@ func (s *Store) GetBatteryHistory(bridgeID string, days int) ([]BatteryPoint, er
 
 func (s *Store) GetBridgeStatus(bridgeID string) (*models.BridgeStatus, error) {
 	b := &models.BridgeStatus{}
-	err := s.db.QueryRow("SELECT bridge_id, connected, watch_battery, COALESCE(watch_firmware,''), COALESCE(watch_manufacturer,''), COALESCE(watch_software,''), COALESCE(watch_steps,0), COALESCE(last_sync,''), COALESCE(bridge_ip,''), last_heartbeat FROM bridge_status WHERE bridge_id = ?", bridgeID).
-		Scan(&b.BridgeID, &b.Connected, &b.WatchBattery, &b.WatchFirmware, &b.WatchManufacturer, &b.WatchSoftware, &b.WatchSteps, &b.LastSync, &b.BridgeIP, &b.LastHeartbeat)
+	err := s.db.QueryRow("SELECT bridge_id, connected, watch_battery, COALESCE(watch_firmware,''), COALESCE(watch_manufacturer,''), COALESCE(watch_software,''), COALESCE(watch_steps,0), COALESCE(watch_uptime,0), COALESCE(last_sync,''), COALESCE(bridge_ip,''), last_heartbeat FROM bridge_status WHERE bridge_id = ?", bridgeID).
+		Scan(&b.BridgeID, &b.Connected, &b.WatchBattery, &b.WatchFirmware, &b.WatchManufacturer, &b.WatchSoftware, &b.WatchSteps, &b.WatchUptime, &b.LastSync, &b.BridgeIP, &b.LastHeartbeat)
 	if err != nil {
 		return nil, err
 	}

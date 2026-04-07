@@ -65,6 +65,7 @@ class PineTimeBridge : public Component, public ble_client::BLEClientNode {
   // Watch info (populated on BLE connect)
   uint8_t watch_battery_ = 0;
   uint32_t watch_steps_ = 0;
+  uint32_t watch_uptime_ = 0;
   std::string watch_firmware_;
   std::string watch_manufacturer_;
   std::string watch_software_;
@@ -79,6 +80,7 @@ class PineTimeBridge : public Component, public ble_client::BLEClientNode {
   size_t get_reminder_count() const { return api_reminders_.size(); }
   uint8_t get_watch_battery() const { return watch_battery_; }
   uint32_t get_watch_steps() const { return watch_steps_; }
+  uint32_t get_watch_uptime() const { return watch_uptime_; }
   const std::string &get_watch_firmware() const { return watch_firmware_; }
   const std::string &get_watch_manufacturer() const { return watch_manufacturer_; }
   const std::string &get_watch_software() const { return watch_software_; }
@@ -104,6 +106,7 @@ class PineTimeBridge : public Component, public ble_client::BLEClientNode {
   uint16_t list_handle_ = 0;     // Char 0003 - read all reminders
   uint16_t ack_handle_ = 0;      // Char 0004 - notify ack
   uint16_t sync_handle_ = 0;     // Char 0005 - sync all
+  uint16_t status_handle_ = 0;   // Char 0006 - read uptime/status
 
   // ANS handles for one-off notifications
   uint16_t ans_handle_ = 0;

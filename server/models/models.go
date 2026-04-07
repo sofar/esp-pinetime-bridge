@@ -53,6 +53,7 @@ type BridgeStatus struct {
 	WatchManufacturer string    `json:"watch_manufacturer"`
 	WatchSoftware     string    `json:"watch_software"`
 	WatchSteps        uint32    `json:"watch_steps"`
+	WatchUptime       uint32    `json:"watch_uptime"`
 	LastSync          string    `json:"last_sync"`
 	BridgeIP          string    `json:"bridge_ip"`
 	LastHeartbeat     time.Time `json:"last_heartbeat"`
