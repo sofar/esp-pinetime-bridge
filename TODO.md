@@ -37,3 +37,11 @@ Target: 40 reminders with 64-character messages (currently 10 × 32).
 - [ ] Update bridge `WatchReminder` struct to match new sizes
 - [ ] Update `rtttl2pcm.py` tone count comment if MaxReminders changes
 - [ ] Update ARCHITECTURE.md with final capacity
+
+## 4. HTTP connection keep-alive on bridge
+
+Currently every HTTP request creates/destroys a TCP connection. `esp_http_client` supports keep-alive.
+
+- [ ] Create a persistent `esp_http_client_handle_t` on boot
+- [ ] Reuse for all GET/POST calls (reconnects automatically on error)
+- [ ] Reduces TCP overhead and latency for polling, heartbeat, and sync
