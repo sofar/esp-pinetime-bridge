@@ -13,15 +13,15 @@
 
 ## GPIO Pin Assignments
 
-### Display (QSPI)
+### Display (QSPI — handled by ESPHome model driver)
 | Function | GPIO |
 |----------|------|
 | CS | GPIO12 |
-| QSPI CLK | GPIO47 |
-| QSPI D0 | GPIO18 |
-| QSPI D1 | GPIO7 |
-| QSPI D2 | GPIO48 |
-| QSPI D3 | GPIO5 |
+| SCLK | GPIO11 |
+| SDIO0 | GPIO4 |
+| SDIO1 | GPIO5 |
+| SDIO2 | GPIO6 |
+| SDIO3 | GPIO7 |
 
 ### Touch (I2C)
 | Function | GPIO |
@@ -37,7 +37,7 @@
 | I2S LRCLK/WS | GPIO45 |
 | I2S DOUT (speaker) | GPIO8 |
 | I2S DIN (microphone) | GPIO10 |
-| I2S MCLK | GPIO42 |
+| I2S MCLK | GPIO16 |
 | I2C SDA | GPIO15 (shared) |
 | I2C SCL | GPIO14 (shared) |
 | Speaker PA Enable | GPIO46 |
