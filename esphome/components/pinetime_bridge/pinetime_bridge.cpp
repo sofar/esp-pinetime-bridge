@@ -130,10 +130,18 @@ void PineTimeBridge::setup() {
 void PineTimeBridge::loop() {
   uint32_t now = millis();
 
-  // DFU processing takes priority
+  // DFU processing takes priority (with 5-minute safety timeout)
   if (dfu_client_.state() != DfuState::IDLE && dfu_client_.state() != DfuState::COMPLETE && dfu_client_.state() != DfuState::FAILED) {
-    dfu_client_.process();
-    return;
+    static uint32_t dfu_start_ms = 0;
+    if (dfu_start_ms == 0) dfu_start_ms = now;
+    if (now - dfu_start_ms > 300000) {
+      ESP_LOGE(TAG, "[DFU] Timeout after 5 minutes — resetting DFU client");
+      dfu_client_.reset();
+      dfu_start_ms = 0;
+    } else {
+      dfu_client_.process();
+      return;
+    }
   }
 
   // After DFU completes, force a reconnect for time sync only.
