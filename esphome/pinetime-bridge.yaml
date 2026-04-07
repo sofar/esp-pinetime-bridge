@@ -454,11 +454,11 @@ lvgl:
             text_font: roboto_72
         - label:
             id: lbl_date
-            align: TOP_MID
-            y: 95
+            align: BOTTOM_MID
+            y: -30
             text: ""
             text_color: 0x888888
-            text_font: roboto_14
+            text_font: roboto_36
 
     # Debug / status page — swipe right from clock
     - id: debug_page
