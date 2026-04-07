@@ -39,6 +39,7 @@ esphome:
         # Initialize raw I2S speaker (bypasses ESPHome speaker component)
         - lambda: |-
             esphome::bridge_speaker::init();
+            esphome::bridge_speaker::set_volume(id(saved_volume));
     - priority: 500
       then:
         - lambda: |-
@@ -424,6 +425,7 @@ lvgl:
   touchscreens:
     - main_touch
   pages:
+    # Main clock page — clean time display
     - id: status_page
       bg_color: 0x000000
       on_swipe_up:
@@ -432,12 +434,51 @@ lvgl:
             char buf[16];
             snprintf(buf, sizeof(buf), "Volume: %u%%", esphome::bridge_speaker::get_volume());
             id(show_event)->execute("\U000F0580", std::string(buf), 0xFFFFFF, 2);
+              id(saved_volume) = esphome::bridge_speaker::get_volume();
       on_swipe_down:
         - lambda: |-
             esphome::bridge_speaker::volume_down();
             char buf[16];
             snprintf(buf, sizeof(buf), "Volume: %u%%", esphome::bridge_speaker::get_volume());
             id(show_event)->execute("\U000F0580", std::string(buf), 0xFFFFFF, 2);
+              id(saved_volume) = esphome::bridge_speaker::get_volume();
+      on_swipe_right:
+        - lambda: lv_scr_load(id(debug_page)->obj);
+      widgets:
+        - label:
+            id: lbl_clock
+            align: TOP_MID
+            y: 20
+            text: "00:00"
+            text_color: 0xFFFFFF
+            text_font: roboto_72
+        - label:
+            id: lbl_date
+            align: TOP_MID
+            y: 95
+            text: ""
+            text_color: 0x888888
+            text_font: roboto_14
+
+    # Debug / status page — swipe right from clock
+    - id: debug_page
+      bg_color: 0x000000
+      on_swipe_up:
+        - lambda: |-
+            esphome::bridge_speaker::volume_up();
+            char buf[16];
+            snprintf(buf, sizeof(buf), "Volume: %u%%", esphome::bridge_speaker::get_volume());
+            id(show_event)->execute("\U000F0580", std::string(buf), 0xFFFFFF, 2);
+              id(saved_volume) = esphome::bridge_speaker::get_volume();
+      on_swipe_down:
+        - lambda: |-
+            esphome::bridge_speaker::volume_down();
+            char buf[16];
+            snprintf(buf, sizeof(buf), "Volume: %u%%", esphome::bridge_speaker::get_volume());
+            id(show_event)->execute("\U000F0580", std::string(buf), 0xFFFFFF, 2);
+              id(saved_volume) = esphome::bridge_speaker::get_volume();
+      on_swipe_left:
+        - lambda: lv_scr_load(id(status_page)->obj);
       widgets:
         # Title
         - label:
@@ -546,15 +587,6 @@ lvgl:
             text_color: 0x999999
             text_font: montserrat_14
 
-        # Clock at bottom
-        - label:
-            id: lbl_clock
-            align: BOTTOM_MID
-            y: -12
-            text: "00:00"
-            text_color: 0x666666
-            text_font: montserrat_24
-
     # Event notification page — full screen, wakes display for 30s
     - id: event_page
       bg_color: 0x000000
@@ -564,12 +596,14 @@ lvgl:
             char buf[16];
             snprintf(buf, sizeof(buf), "Volume: %u%%", esphome::bridge_speaker::get_volume());
             id(show_event)->execute("\U000F0580", std::string(buf), 0xFFFFFF, 2);
+              id(saved_volume) = esphome::bridge_speaker::get_volume();
       on_swipe_down:
         - lambda: |-
             esphome::bridge_speaker::volume_down();
             char buf[16];
             snprintf(buf, sizeof(buf), "Volume: %u%%", esphome::bridge_speaker::get_volume());
             id(show_event)->execute("\U000F0580", std::string(buf), 0xFFFFFF, 2);
+              id(saved_volume) = esphome::bridge_speaker::get_volume();
       widgets:
         # Time at top
         - label:
@@ -636,6 +670,10 @@ globals:
   - id: last_battery_warn_ms
     type: uint32_t
     initial_value: "0"
+  - id: saved_volume
+    type: uint8_t
+    restore_value: true
+    initial_value: "50"
   - id: touch_start_y
     type: int
     initial_value: "-1"
@@ -691,12 +729,18 @@ interval:
   - interval: 1s
     then:
       - lambda: |-
-          // Update clock
+          // Update clock and date
           auto time = id(sntp_time).now();
           if (time.is_valid()) {
             char buf[6];
             snprintf(buf, sizeof(buf), "%02d:%02d", time.hour, time.minute);
             lv_label_set_text(id(lbl_clock), buf);
+
+            static const char *days[] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+            static const char *months[] = {"January","February","March","April","May","June","July","August","September","October","November","December"};
+            char datebuf[40];
+            snprintf(datebuf, sizeof(datebuf), "%s, %s %d", days[time.day_of_week - 1], months[time.month - 1], time.day_of_month);
+            lv_label_set_text(id(lbl_date), datebuf);
           }
 
           // Auto-dismiss event page after 30 seconds
