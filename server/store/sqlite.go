@@ -107,6 +107,19 @@ func (s *Store) Migrate() {
 	if _, err := s.db.Exec(migrationSQL); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
+	// Add columns that may not exist in older databases
+	alterStatements := []string{
+		"ALTER TABLE bridge_status ADD COLUMN watch_firmware TEXT DEFAULT ''",
+		"ALTER TABLE bridge_status ADD COLUMN watch_manufacturer TEXT DEFAULT ''",
+		"ALTER TABLE bridge_status ADD COLUMN watch_software TEXT DEFAULT ''",
+		"ALTER TABLE bridge_status ADD COLUMN watch_steps INTEGER DEFAULT 0",
+		"ALTER TABLE bridge_status ADD COLUMN watch_uptime INTEGER DEFAULT 0",
+		"ALTER TABLE bridge_status ADD COLUMN last_sync TEXT DEFAULT ''",
+		"ALTER TABLE bridge_status ADD COLUMN bridge_ip TEXT DEFAULT ''",
+	}
+	for _, stmt := range alterStatements {
+		s.db.Exec(stmt) // ignore "duplicate column" errors
+	}
 }
 
 // Users
