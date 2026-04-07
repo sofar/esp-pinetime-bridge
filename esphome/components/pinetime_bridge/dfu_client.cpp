@@ -333,7 +333,7 @@ void DfuClient::handle_notification_(const uint8_t *data, size_t len) {
 void DfuClient::fail_(const char *msg) {
   ESP_LOGE(TAG, "[DFU] FAILED: %s", msg);
   state_ = DfuState::FAILED;
-  error_msg_ = msg;
+  error_msg_ = std::string(msg);
 }
 
 }  // namespace pinetime_bridge

@@ -125,13 +125,15 @@ class PineTimeBridge : public Component, public ble_client::BLEClientNode {
   uint16_t steps_handle_ = 0;
   uint16_t dfu_rev_handle_ = 0;
 
-  // State
-  bool services_discovered_ = false;
-  bool ble_busy_ = false;
+  // State (volatile: written by BLE callback task, read by main loop task)
+  volatile bool services_discovered_ = false;
+  volatile bool ble_busy_ = false;
   bool needs_ble_sync_ = false;      // true when we have data to push to watch
   bool ble_work_done_ = false;       // true when sync/acks complete, ready to disconnect
-  bool ble_connected_ = false;       // our own tracking of BLE connection state
-  uint8_t pending_writes_ = 0;      // count of non-queue writes in flight
+  volatile bool ble_connected_ = false;       // our own tracking of BLE connection state
+  volatile uint8_t gap_event_pending_ = 0;  // deferred GAP events: 1=passkey, 2=paired, 3=failed
+  uint8_t gap_auth_fail_reason_ = 0;
+  volatile uint8_t pending_writes_ = 0;      // count of non-queue writes in flight
   uint32_t last_poll_ms_ = 0;
   uint32_t last_heartbeat_ms_ = 0;
   uint32_t ble_connect_time_ms_ = 0; // when we last connected, for idle disconnect

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <esp_heap_caps.h>
 #include <functional>
 #include <esp_gattc_api.h>
 #include <esp_gap_ble_api.h>
@@ -32,10 +33,14 @@ class DfuClient {
   void process();  // Call from loop
 
   DfuState state() const { return state_; }
-  void reset() { state_ = DfuState::IDLE; }
+  void reset() {
+    state_ = DfuState::IDLE;
+    if (bin_data_) { heap_caps_free(bin_data_); bin_data_ = nullptr; bin_size_ = 0; }
+    if (dat_data_) { heap_caps_free(dat_data_); dat_data_ = nullptr; dat_size_ = 0; }
+  }
   float progress() const;  // 0.0 to 1.0
   const char *state_str() const;
-  const char *error() const { return error_msg_; }
+  const char *error() const { return error_msg_.c_str(); }
 
   // Set by parent for BLE writes
   std::function<esp_err_t(uint16_t handle, const uint8_t *data, size_t len, bool response)> write_char;
@@ -43,7 +48,7 @@ class DfuClient {
 
  private:
   DfuState state_ = DfuState::IDLE;
-  const char *error_msg_ = "";
+  std::string error_msg_;
 
   // Firmware data (allocated in PSRAM)
   uint8_t *bin_data_ = nullptr;

@@ -66,33 +66,26 @@ static PineTimeBridge *g_bridge = nullptr;
 void bridge_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
   if (!g_bridge) return;
 
+  // IMPORTANT: GAP callbacks run on the BLE stack task.
+  // Never make blocking calls (HTTP, heavy logging) here.
+  // Set flags and let loop() handle the HTTP work.
   switch (event) {
     case ESP_GAP_BLE_PASSKEY_REQ_EVT:
-      ESP_LOGI(TAG, "[PAIR] Watch requesting passkey — prompting user via server");
+      ESP_LOGI(TAG, "[PAIR] Watch requesting passkey");
       g_bridge->passkey_pending_ = true;
-      // Tell the server we need the user to enter a passkey
-      g_bridge->remote_log_("bridge", "info", "Watch requesting passkey");
-      {
-        char body[64];
-        snprintf(body, sizeof(body), "{\"state\":\"passkey_needed\"}");
-        std::string path = "/api/bridges/" + g_bridge->bridge_id_ + "/pairing";
-        g_bridge->http_post_(path, body);
-      }
+      g_bridge->gap_event_pending_ = 1;  // passkey needed
       break;
 
     case ESP_GAP_BLE_AUTH_CMPL_EVT:
       if (param->ble_security.auth_cmpl.success) {
-        ESP_LOGI(TAG, "[PAIR] Authentication complete — paired successfully");
+        ESP_LOGI(TAG, "[PAIR] Authentication complete");
         g_bridge->pairing_in_progress_ = false;
-        std::string path = "/api/bridges/" + g_bridge->bridge_id_ + "/pairing";
-        g_bridge->http_post_(path, "{\"state\":\"paired\"}");
+        g_bridge->gap_event_pending_ = 2;  // paired
       } else {
         ESP_LOGW(TAG, "[PAIR] Authentication failed: reason=%d", param->ble_security.auth_cmpl.fail_reason);
         g_bridge->pairing_in_progress_ = false;
-        char body[128];
-        snprintf(body, sizeof(body), "{\"state\":\"failed\",\"passkey\":\"auth failed (reason %d)\"}", param->ble_security.auth_cmpl.fail_reason);
-        std::string path = "/api/bridges/" + g_bridge->bridge_id_ + "/pairing";
-        g_bridge->http_post_(path, body);
+        g_bridge->gap_auth_fail_reason_ = param->ble_security.auth_cmpl.fail_reason;
+        g_bridge->gap_event_pending_ = 3;  // failed
       }
       break;
 
@@ -131,16 +124,21 @@ void PineTimeBridge::loop() {
   uint32_t now = millis();
 
   // DFU processing takes priority (with 5-minute safety timeout)
-  if (dfu_client_.state() != DfuState::IDLE && dfu_client_.state() != DfuState::COMPLETE && dfu_client_.state() != DfuState::FAILED) {
+  {
     static uint32_t dfu_start_ms = 0;
-    if (dfu_start_ms == 0) dfu_start_ms = now;
-    if (now - dfu_start_ms > 300000) {
-      ESP_LOGE(TAG, "[DFU] Timeout after 5 minutes — resetting DFU client");
-      dfu_client_.reset();
-      dfu_start_ms = 0;
+    bool dfu_active = dfu_client_.state() != DfuState::IDLE && dfu_client_.state() != DfuState::COMPLETE && dfu_client_.state() != DfuState::FAILED;
+    if (dfu_active) {
+      if (dfu_start_ms == 0) dfu_start_ms = now;
+      if (now - dfu_start_ms > 300000) {
+        ESP_LOGE(TAG, "[DFU] Timeout after 5 minutes — resetting DFU client");
+        dfu_client_.reset();
+        dfu_start_ms = 0;
+      } else {
+        dfu_client_.process();
+        return;
+      }
     } else {
-      dfu_client_.process();
-      return;
+      dfu_start_ms = 0;  // always reset when DFU is not active
     }
   }
 
@@ -226,6 +224,24 @@ void PineTimeBridge::loop() {
     if (now - last_pair_poll > pair_interval) {
       last_pair_poll = now;
       check_pairing_request_();
+    }
+  }
+
+  // Process deferred GAP events (set in BLE callback, processed here on main task)
+  if (gap_event_pending_ > 0) {
+    uint8_t evt = gap_event_pending_;
+    gap_event_pending_ = 0;
+    std::string pair_path = "/api/bridges/" + bridge_id_ + "/pairing";
+    if (evt == 1) {
+      remote_log_("bridge", "info", "Watch requesting passkey");
+      http_post_(pair_path, "{\"state\":\"passkey_needed\"}");
+    } else if (evt == 2) {
+      remote_log_("bridge", "info", "Watch paired successfully");
+      http_post_(pair_path, "{\"state\":\"paired\"}");
+    } else if (evt == 3) {
+      char body[128];
+      snprintf(body, sizeof(body), "{\"state\":\"failed\",\"passkey\":\"auth failed (reason %d)\"}", gap_auth_fail_reason_);
+      http_post_(pair_path, body);
     }
   }
 
