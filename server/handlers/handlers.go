@@ -80,6 +80,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func readJSON(r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, 64<<10) // 64KB limit
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
@@ -240,7 +241,7 @@ func (h *Handler) UpdateReminder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rid, err := strconv.Atoi(r.PathValue("rid"))
-	if err != nil {
+	if err != nil || rid < 0 || rid > 255 {
 		http.Error(w, "invalid reminder id", http.StatusBadRequest)
 		return
 	}
@@ -265,7 +266,7 @@ func (h *Handler) DeleteReminder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rid, err := strconv.Atoi(r.PathValue("rid"))
-	if err != nil {
+	if err != nil || rid < 0 || rid > 255 {
 		http.Error(w, "invalid reminder id", http.StatusBadRequest)
 		return
 	}
@@ -454,8 +455,12 @@ func (h *Handler) UploadFirmware(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		data, _ := io.ReadAll(rc)
+		data, err := io.ReadAll(rc)
 		rc.Close()
+		if err != nil {
+			http.Error(w, "failed to read zip entry: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 
 		if strings.HasSuffix(f.Name, ".bin") {
 			binData = data
@@ -470,8 +475,14 @@ func (h *Handler) UploadFirmware(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write files to firmware directory
-	os.WriteFile(filepath.Join(h.firmwareDir, "firmware.bin"), binData, 0644)
-	os.WriteFile(filepath.Join(h.firmwareDir, "firmware.dat"), datData, 0644)
+	if err := os.WriteFile(filepath.Join(h.firmwareDir, "firmware.bin"), binData, 0644); err != nil {
+		http.Error(w, "failed to write firmware.bin: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(h.firmwareDir, "firmware.dat"), datData, 0644); err != nil {
+		http.Error(w, "failed to write firmware.dat: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// Write metadata
 	version := strings.TrimSuffix(header.Filename, ".zip")
@@ -484,8 +495,15 @@ func (h *Handler) UploadFirmware(w http.ResponseWriter, r *http.Request) {
 		DatSize:    int64(len(datData)),
 		UploadedAt: time.Now().Format(time.RFC3339),
 	}
-	infoJSON, _ := json.Marshal(info)
-	os.WriteFile(filepath.Join(h.firmwareDir, "info.json"), infoJSON, 0644)
+	infoJSON, err := json.Marshal(info)
+	if err != nil {
+		http.Error(w, "failed to marshal info: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(h.firmwareDir, "info.json"), infoJSON, 0644); err != nil {
+		http.Error(w, "failed to write info.json: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	h.serverLog(0, "info", fmt.Sprintf("Firmware uploaded: %s (%d bytes bin, %d bytes dat)", info.Version, info.BinSize, info.DatSize))
 	writeJSON(w, http.StatusOK, info)

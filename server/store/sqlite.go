@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/sofar/pinetime-bridge-server/models"
@@ -82,6 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_battery_bridge_time ON battery_history(bridge_id,
 
 type Store struct {
 	db         *sql.DB
+	mu         sync.RWMutex                          // protects pairing + discovered maps
 	pairing    map[string]*models.PairingRequest    // bridge_id -> pairing state
 	discovered map[string][]models.DiscoveredWatch   // bridge_id -> nearby watches
 }
@@ -92,6 +94,11 @@ func Open(path string) *Store {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	db.SetMaxOpenConns(1) // SQLite doesn't handle concurrent writes well
+
+	// Enable foreign keys and WAL mode for better concurrency/integrity
+	db.Exec("PRAGMA journal_mode = WAL")
+	db.Exec("PRAGMA foreign_keys = ON")
+
 	return &Store{
 		db:         db,
 		pairing:    make(map[string]*models.PairingRequest),
@@ -132,7 +139,7 @@ func (s *Store) CreateUser(u *models.User) error {
 	if err != nil {
 		return err
 	}
-	u.ID, _ = res.LastInsertId()
+	u.ID, err = res.LastInsertId()
 	return nil
 }
 
@@ -190,7 +197,7 @@ func (s *Store) CreateReminder(r *models.Reminder) error {
 	if err != nil {
 		return err
 	}
-	r.ID, _ = res.LastInsertId()
+	r.ID, err = res.LastInsertId()
 	return nil
 }
 
@@ -237,7 +244,7 @@ func (s *Store) CreateAck(a *models.ReminderAck) error {
 	if err != nil {
 		return err
 	}
-	a.ID, _ = res.LastInsertId()
+	a.ID, err = res.LastInsertId()
 	return nil
 }
 
@@ -285,6 +292,8 @@ func (s *Store) UpdateBridgeStatus(b *models.BridgeStatus) error {
 	// Record battery history (only if battery > 0, i.e. watch is reporting)
 	if b.WatchBattery > 0 {
 		s.db.Exec(`INSERT INTO battery_history (bridge_id, battery) VALUES (?, ?)`, b.BridgeID, b.WatchBattery)
+		// Prune old battery history (keep 90 days)
+		s.db.Exec(`DELETE FROM battery_history WHERE recorded_at < datetime('now', '-90 days')`)
 	}
 	return nil
 }
@@ -336,7 +345,7 @@ func (s *Store) CreateNotification(n *models.Notification) error {
 	if err != nil {
 		return err
 	}
-	n.ID, _ = res.LastInsertId()
+	n.ID, err = res.LastInsertId()
 	return nil
 }
 
@@ -400,10 +409,14 @@ func (s *Store) ListLogs(userID int64, limit int) ([]models.LogEntry, error) {
 // Discovered watches (in-memory, transient)
 
 func (s *Store) SetDiscoveredWatches(bridgeID string, watches []models.DiscoveredWatch) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.discovered[bridgeID] = watches
 }
 
 func (s *Store) GetDiscoveredWatches(bridgeID string) []models.DiscoveredWatch {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if w, ok := s.discovered[bridgeID]; ok {
 		return w
 	}
@@ -411,11 +424,15 @@ func (s *Store) GetDiscoveredWatches(bridgeID string) []models.DiscoveredWatch {
 }
 
 func (s *Store) SetPairingState(bridgeID string, req *models.PairingRequest) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	req.BridgeID = bridgeID
 	s.pairing[bridgeID] = req
 }
 
 func (s *Store) GetPairingState(bridgeID string) *models.PairingRequest {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if p, ok := s.pairing[bridgeID]; ok {
 		return p
 	}
@@ -423,6 +440,8 @@ func (s *Store) GetPairingState(bridgeID string) *models.PairingRequest {
 }
 
 func (s *Store) ClearPairingState(bridgeID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.pairing, bridgeID)
 }
 
