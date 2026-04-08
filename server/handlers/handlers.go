@@ -21,13 +21,20 @@ import (
 )
 
 type Handler struct {
-	store       *store.Store
-	firmwareDir string
+	store          *store.Store
+	firmwareDir    string
+	lastHeartbeat  map[string]time.Time // bridge_id -> last heartbeat time
 }
+
+const bridgeOfflineThreshold = 90 * time.Second // 3 missed heartbeats (30s interval)
 
 func New(s *store.Store, firmwareDir string) *Handler {
 	os.MkdirAll(firmwareDir, 0755)
-	return &Handler{store: s, firmwareDir: firmwareDir}
+	return &Handler{
+		store:         s,
+		firmwareDir:   firmwareDir,
+		lastHeartbeat: make(map[string]time.Time),
+	}
 }
 
 func (h *Handler) serverLog(userID int64, level, msg string) {
@@ -384,12 +391,15 @@ func (h *Handler) UpdateBridgeStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	connStr := "disconnected"
-	if b.Connected {
-		connStr = fmt.Sprintf("connected, battery %d%%", b.WatchBattery)
+
+	// Log bridge online/offline transitions (not every heartbeat)
+	now := time.Now()
+	last, seen := h.lastHeartbeat[bridgeID]
+	if !seen || now.Sub(last) > bridgeOfflineThreshold {
+		h.serverLog(0, "info", fmt.Sprintf("Bridge %s came online", bridgeID))
 	}
-	// Log heartbeat with user_id 0 (system-wide) since bridge doesn't know user
-	h.store.AddLog(&models.LogEntry{UserID: 0, Source: "bridge", Level: "info", Message: fmt.Sprintf("Heartbeat from %s: %s", bridgeID, connStr)})
+	h.lastHeartbeat[bridgeID] = now
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
