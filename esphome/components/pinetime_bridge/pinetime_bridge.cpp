@@ -280,7 +280,9 @@ void PineTimeBridge::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if
 
     case ESP_GATTC_DISCONNECT_EVT:
       ESP_LOGW(TAG, "Disconnected from PineTime — will reconnect");
-      remote_log_("bridge", "info", "BLE disconnected from watch");
+      if (ble_connected_) {
+        remote_log_("bridge", "info", "BLE disconnected from watch");
+      }
       ble_connected_ = false;
       services_discovered_ = false;
       ble_connect_time_ms_ = millis();  // start reconnect backoff from now
@@ -1157,12 +1159,11 @@ void PineTimeBridge::send_heartbeat_() {
   if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
     snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ip_info.ip));
   }
-  bool watch_seen = services_discovered_ || watch_battery_ > 0;
   char body[512];
   snprintf(body, sizeof(body),
            "{\"connected\":%s,\"watch_battery\":%u,\"last_sync\":\"%s\",\"last_dfu\":\"%s\",\"bridge_ip\":\"%s\","
            "\"watch_firmware\":\"%s\",\"watch_manufacturer\":\"%s\",\"watch_software\":\"%s\",\"watch_steps\":%u,\"watch_uptime\":%u}",
-           watch_seen ? "true" : "false",
+           ble_connected_ ? "true" : "false",
            watch_battery_,
            last_sync_time_.c_str(),
            last_dfu_time_.c_str(),
