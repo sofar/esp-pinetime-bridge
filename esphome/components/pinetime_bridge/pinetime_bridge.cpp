@@ -1040,7 +1040,8 @@ void PineTimeBridge::poll_api_() {
   ESP_LOGD(TAG, "[API] Fetched %u reminders from server", api_reminders_.size());
 
   // First successful poll after boot
-  if (last_sync_hash_ == 0) {
+  if (!boot_logged_) {
+    boot_logged_ = true;
     char logmsg[128];
     snprintf(logmsg, sizeof(logmsg), "Bridge online, fetched %u reminders", (unsigned)api_reminders_.size());
     remote_log_("bridge", "info", logmsg);
