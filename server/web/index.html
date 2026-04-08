@@ -824,6 +824,9 @@ async function loadEquipment() {
           } else if (s.watch_battery > 0) {
             watchParts.push('Never synced');
           }
+          if (s.last_dfu) {
+            watchParts.push('Firmware updated: ' + fmtTime(s.last_dfu));
+          }
           if (s.watch_battery > 0) watchParts.push('Battery: ' + s.watch_battery + '%');
           document.getElementById('eqWatchStatus').innerHTML = watchParts.join('<br>');
         }
@@ -1017,17 +1020,20 @@ function drawBatteryChart(points) {
     svg += '<text x="'+(pad.left-4)+'" y="'+(y+3)+'" text-anchor="end" fill="#999" font-size="10">'+pct+'%</text>';
   }
 
-  // Date labels
+  // X-axis labels: oldest on left, every 5 days, "Now" on right
   const dayMs = 86400000;
+  const dtOldest = new Date(tMin);
+  svg += '<text x="'+pad.left+'" y="'+(H-5)+'" text-anchor="start" fill="#999" font-size="10">'+(dtOldest.getMonth()+1)+'/'+dtOldest.getDate()+'</text>';
   const startDay = new Date(tMin);
   startDay.setHours(0,0,0,0);
-  for (let d = startDay.getTime(); d <= tMax; d += dayMs * 7) {
+  for (let d = startDay.getTime() + dayMs * 5; d <= tMax - dayMs * 2; d += dayMs * 5) {
     const x = tx(d);
-    if (x >= pad.left && x <= pad.left + cw) {
+    if (x >= pad.left + 30 && x <= pad.left + cw - 30) {
       const dt = new Date(d);
       svg += '<text x="'+x+'" y="'+(H-5)+'" text-anchor="middle" fill="#999" font-size="10">'+(dt.getMonth()+1)+'/'+dt.getDate()+'</text>';
     }
   }
+  svg += '<text x="'+(pad.left+cw)+'" y="'+(H-5)+'" text-anchor="end" fill="#999" font-size="10">Now</text>';
 
   // Line path
   let linePath = '';

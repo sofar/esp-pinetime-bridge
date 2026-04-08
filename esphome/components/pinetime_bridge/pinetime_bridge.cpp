@@ -147,6 +147,15 @@ void PineTimeBridge::loop() {
   if (dfu_client_.state() == DfuState::COMPLETE || dfu_client_.state() == DfuState::FAILED) {
     ESP_LOGI(TAG, "[DFU] %s — forcing reconnect for time sync (reminders deferred 2 min)",
              dfu_client_.state() == DfuState::COMPLETE ? "Complete" : "Failed");
+    if (dfu_client_.state() == DfuState::COMPLETE) {
+      auto t = esphome::ESPTime::from_epoch_local(::time(nullptr));
+      if (t.is_valid()) {
+        char buf[20];
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d",
+                 t.year, t.month, t.day_of_month, t.hour, t.minute, t.second);
+        last_dfu_time_ = buf;
+      }
+    }
     post_dfu_ = true;
     post_dfu_time_ms_ = now;
     needs_ble_sync_ = true;
@@ -1151,11 +1160,12 @@ void PineTimeBridge::send_heartbeat_() {
   bool watch_seen = services_discovered_ || watch_battery_ > 0;
   char body[512];
   snprintf(body, sizeof(body),
-           "{\"connected\":%s,\"watch_battery\":%u,\"last_sync\":\"%s\",\"bridge_ip\":\"%s\","
+           "{\"connected\":%s,\"watch_battery\":%u,\"last_sync\":\"%s\",\"last_dfu\":\"%s\",\"bridge_ip\":\"%s\","
            "\"watch_firmware\":\"%s\",\"watch_manufacturer\":\"%s\",\"watch_software\":\"%s\",\"watch_steps\":%u,\"watch_uptime\":%u}",
            watch_seen ? "true" : "false",
            watch_battery_,
            last_sync_time_.c_str(),
+           last_dfu_time_.c_str(),
            ip_str,
            watch_firmware_.c_str(),
            watch_manufacturer_.c_str(),

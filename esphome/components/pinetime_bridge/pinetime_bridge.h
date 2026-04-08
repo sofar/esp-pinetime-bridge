@@ -145,6 +145,7 @@ class PineTimeBridge : public Component, public ble_client::BLEClientNode {
   std::string last_ack_message_;     // message text of last acked reminder
   bool post_dfu_ = false;           // true after DFU, skip reminder sync for grace period
   uint32_t post_dfu_time_ms_ = 0;  // when DFU completed, for grace period timing
+  std::string last_dfu_time_;      // ISO timestamp of last successful DFU
 
   // Config
   std::string api_base_url_;
