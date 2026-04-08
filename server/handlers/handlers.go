@@ -37,7 +37,7 @@ func New(s *store.Store, firmwareDir string) *Handler {
 	}
 }
 
-func (h *Handler) serverLog(userID int64, level, msg string) {
+func (h *Handler) ServerLog(userID int64, level, msg string) {
 	h.store.AddLog(&models.LogEntry{UserID: userID, Source: "server", Level: level, Message: msg})
 }
 
@@ -238,7 +238,7 @@ func (h *Handler) CreateReminder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.serverLog(userID, "info", fmt.Sprintf("Reminder #%d created: %02d:%02d \"%s\"", rem.ReminderID, rem.Hours, rem.Minutes, rem.Message))
+	h.ServerLog(userID, "info", fmt.Sprintf("Reminder #%d created: %02d:%02d \"%s\"", rem.ReminderID, rem.Hours, rem.Minutes, rem.Message))
 	writeJSON(w, http.StatusCreated, rem)
 }
 
@@ -282,7 +282,7 @@ func (h *Handler) DeleteReminder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.serverLog(userID, "info", fmt.Sprintf("Reminder #%d deleted", rid))
+	h.ServerLog(userID, "info", fmt.Sprintf("Reminder #%d deleted", rid))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -304,7 +304,7 @@ func (h *Handler) CreateAck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.serverLog(userID, "info", fmt.Sprintf("Reminder #%d acknowledged by watch", ack.ReminderID))
+	h.ServerLog(userID, "info", fmt.Sprintf("Reminder #%d acknowledged by watch", ack.ReminderID))
 	writeJSON(w, http.StatusCreated, ack)
 }
 
@@ -343,7 +343,7 @@ func (h *Handler) CreateNotification(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.serverLog(userID, "info", fmt.Sprintf("Notification queued: \"%s\"", n.Message))
+	h.ServerLog(userID, "info", fmt.Sprintf("Notification queued: \"%s\"", n.Message))
 	writeJSON(w, http.StatusCreated, n)
 }
 
@@ -396,7 +396,7 @@ func (h *Handler) UpdateBridgeStatus(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	last, seen := h.lastHeartbeat[bridgeID]
 	if !seen || now.Sub(last) > bridgeOfflineThreshold {
-		h.serverLog(0, "info", fmt.Sprintf("Bridge %s came online", bridgeID))
+		h.ServerLog(0, "info", fmt.Sprintf("Bridge %s came online", bridgeID))
 	}
 	h.lastHeartbeat[bridgeID] = now
 
@@ -528,7 +528,7 @@ func (h *Handler) UploadFirmware(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.serverLog(0, "info", fmt.Sprintf("Firmware uploaded: %s (%d bytes bin, %d bytes dat)", info.Version, info.BinSize, info.DatSize))
+	h.ServerLog(0, "info", fmt.Sprintf("Firmware uploaded: %s (%d bytes bin, %d bytes dat)", info.Version, info.BinSize, info.DatSize))
 	writeJSON(w, http.StatusOK, info)
 }
 
