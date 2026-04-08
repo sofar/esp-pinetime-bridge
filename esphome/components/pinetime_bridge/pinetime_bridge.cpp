@@ -670,7 +670,8 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
 
 std::string PineTimeBridge::http_get_(const std::string &path) {
   std::string url = api_base_url_ + path;
-  char response_buf[4096] = {0};
+  static char response_buf[4096];
+  memset(response_buf, 0, sizeof(response_buf));
   HttpBuffer buf = {response_buf, 0, sizeof(response_buf) - 1};
 
   esp_http_client_config_t config = {};
@@ -850,8 +851,8 @@ void PineTimeBridge::check_pairing_request_() {
   cJSON *root = cJSON_Parse(response.c_str());
   if (!root) return;
 
-  const char *state = cJSON_GetObjectItem(root, "state") ? cJSON_GetObjectItem(root, "state")->valuestring : "idle";
-  const char *passkey_field = cJSON_GetObjectItem(root, "passkey") ? cJSON_GetObjectItem(root, "passkey")->valuestring : "";
+  const char *state = cJSON_GetObjectItem(root, "state") && cJSON_GetObjectItem(root, "state")->valuestring ? cJSON_GetObjectItem(root, "state")->valuestring : "idle";
+  const char *passkey_field = cJSON_GetObjectItem(root, "passkey") && cJSON_GetObjectItem(root, "passkey")->valuestring ? cJSON_GetObjectItem(root, "passkey")->valuestring : "";
 
   if (strcmp(state, "dfu") == 0 && dfu_client_.state() == DfuState::IDLE) {
     // Clear the DFU request on server FIRST to prevent retry loops
@@ -928,7 +929,7 @@ void PineTimeBridge::restore_paired_address_from_server_() {
   cJSON *root = cJSON_Parse(response.c_str());
   if (!root) return;
 
-  const char *mac = cJSON_GetObjectItem(root, "watch_mac") ? cJSON_GetObjectItem(root, "watch_mac")->valuestring : "";
+  const char *mac = cJSON_GetObjectItem(root, "watch_mac") && cJSON_GetObjectItem(root, "watch_mac")->valuestring ? cJSON_GetObjectItem(root, "watch_mac")->valuestring : "";
   if (strlen(mac) == 17) {
     uint64_t addr = 0;
     unsigned int b[6];
@@ -1018,7 +1019,7 @@ void PineTimeBridge::poll_api_() {
     r.priority = cJSON_GetObjectItem(item, "priority") ? cJSON_GetObjectItem(item, "priority")->valueint : 1;
     r.month = cJSON_GetObjectItem(item, "month") ? cJSON_GetObjectItem(item, "month")->valueint : 0;
     r.day = cJSON_GetObjectItem(item, "day") ? cJSON_GetObjectItem(item, "day")->valueint : 0;
-    r.message = cJSON_GetObjectItem(item, "message") ? cJSON_GetObjectItem(item, "message")->valuestring : "";
+    r.message = cJSON_GetObjectItem(item, "message") && cJSON_GetObjectItem(item, "message")->valuestring ? cJSON_GetObjectItem(item, "message")->valuestring : "";
     r.enabled = cJSON_GetObjectItem(item, "enabled") ? cJSON_IsTrue(cJSON_GetObjectItem(item, "enabled")) : true;
     api_reminders_.push_back(r);
   }
@@ -1051,7 +1052,7 @@ void PineTimeBridge::poll_api_() {
       count = cJSON_GetArraySize(root);
       for (int i = 0; i < count; i++) {
         cJSON *item = cJSON_GetArrayItem(root, i);
-        const char *msg = cJSON_GetObjectItem(item, "message") ? cJSON_GetObjectItem(item, "message")->valuestring : "";
+        const char *msg = cJSON_GetObjectItem(item, "message") && cJSON_GetObjectItem(item, "message")->valuestring ? cJSON_GetObjectItem(item, "message")->valuestring : "";
         int64_t notif_id = cJSON_GetObjectItem(item, "id") ? cJSON_GetObjectItem(item, "id")->valueint : 0;
 
         if (strlen(msg) > 0) {

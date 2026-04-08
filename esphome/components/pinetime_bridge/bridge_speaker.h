@@ -75,7 +75,7 @@ static void play_mono_pcm(const uint8_t *data, size_t len) {
   }
 
   size_t bytes_written = 0;
-  i2s_channel_write(tx_handle_, stereo, num_samples * 4, &bytes_written, portMAX_DELAY);
+  i2s_channel_write(tx_handle_, stereo, num_samples * 4, &bytes_written, pdMS_TO_TICKS(2000));
 
   free(stereo);
   xSemaphoreGive(mutex_);
