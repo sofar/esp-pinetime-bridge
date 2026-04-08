@@ -70,6 +70,7 @@ type Notification struct {
 
 type FirmwareInfo struct {
 	Version    string `json:"version"`
+	GitRef     string `json:"git_ref"`
 	Filename   string `json:"filename"`
 	Size       int64  `json:"size"`
 	BinSize    int64  `json:"bin_size"`

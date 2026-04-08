@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -487,8 +488,20 @@ func (h *Handler) UploadFirmware(w http.ResponseWriter, r *http.Request) {
 	// Write metadata
 	version := strings.TrimSuffix(header.Filename, ".zip")
 	version = strings.TrimPrefix(version, "pinetime-mcuboot-app-dfu-")
+
+	// Extract git ref from binary (InfiniTime embeds "X.Y.Z-shortref" string)
+	gitRef := ""
+	re := regexp.MustCompile(`\d+\.\d+\.\d+-([0-9a-f]{8})`)
+	if m := re.Find(binData); m != nil {
+		parts := strings.SplitN(string(m), "-", 2)
+		if len(parts) == 2 {
+			gitRef = parts[1]
+		}
+	}
+
 	info := models.FirmwareInfo{
 		Version:    version,
+		GitRef:     gitRef,
 		Filename:   header.Filename,
 		Size:       int64(len(zipData)),
 		BinSize:    int64(len(binData)),

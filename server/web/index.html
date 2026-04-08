@@ -897,7 +897,9 @@ async function loadFirmwareInfo() {
     if (res.ok) {
       const info = await res.json();
       document.getElementById('fwInfo').innerHTML =
-        'Version: <strong>' + esc(info.version) + '</strong> &middot; ' +
+        'Version: <strong>' + esc(info.version) + '</strong>' +
+        (info.git_ref ? ' (<code>' + esc(info.git_ref) + '</code>)' : '') +
+        ' &middot; ' +
         (info.bin_size / 1024).toFixed(0) + ' KB &middot; ' +
         'Uploaded: ' + fmtTime(info.uploaded_at);
       document.getElementById('fwUpdateBtn').style.display = '';
