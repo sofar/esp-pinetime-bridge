@@ -19,6 +19,60 @@
   <h1>ESP PineTime Bridge</h1>
   <p>A three-component system for managing daily reminders on a <a href="https://www.pine64.org/pinetime/">PineTime</a> smartwatch.</p>
 
+  <h2>What is this?</h2>
+
+  <p>This project is a full service stack to allow a parent or caretaker to administrate "reminders"
+  on the Open Source <a href="https://github.com/InfiniTimeOrg/InfiniTime">InfiniTime</a> smart watch (also known as "<a href="https://www.pine64.org/pinetime/">PineTime</a>"). The PineTime smart watch is an open source
+  digital watch. </p>
+
+  <p>This project makes the tasks of having to flash the firmware, and program the reminders, easy on
+  those that operate them. The technical details of this process are mostly taken care of, and it should be
+  easy enough for this to be deployed by a person with modest computing skills.</p>
+
+  <p>This project also aims to be affordable. The PineTime watch itself is inexpensive, and the
+  cost of an ESP32 SoC device similarly is cheap enough that it doesn't cost much more than that
+  and maybe a few cables to get started.</p>
+
+  <h2>Why an ESP bridge?</h2>
+
+  <p>One of the more daunting aspects of working with custom watch firmware on the PineTime is that one
+  has to flash the firmware. By deploying the firmware updates on a custom, low cost device that has
+  excellent software support for flashing the watch, we can eliminate the need for third party
+  software, and, the watch firmware can trivially be deployed from the same interface where reminders
+  are managed. This reduces the time needed by caretakers, we get better logging and debugging in return,
+  and the whole experience becomes a lot easier.</p>
+
+  <p>The second reason for a dedicated bridge is that we need a relatively capable system to be able
+  to flash the watch, and synchronize reminders to the pinetime. But smart devices may not be appropriate
+  to have in a bedroom of a target user, and the complications of using mobile devices being used for
+  this task are many: Devices may run out of battery, be out of range, have software update and compatibility
+  issues. All of these things are worries that caretakers shouldn't need to worry about. A special
+  device made and maintained for this purpose that needs a USB port to charge and costs under 50$ is
+  very much worth it.</p>
+
+  <h2>Why the PineTime?</h2>
+
+  <p>The PineTime is open source! It's inexpensive! It can run for 2 weeks on a charge! It
+  doesn't have WiFi and so it can go to school! It doesn't beep, so it isn't a distraction
+  to others! It has excellent BT synchronization capabilities, so the watch can be updated
+  reliably when needed!</p>
+
+  <p>In short, the PineTime watch with InfiniTime firmware is amazing.</p>
+
+  <h2>Why a custom server?</h2>
+
+  <p>Single binary deployment. Can live in a docker container, or just where ever you want
+  it. No complex module dependencies or conflicting OS library versions like NPM or Python, no
+  venv needed. No hair pulling when there are OS or package updates breaking things.</p>
+
+  <h2>Why ESPHome?</h2>
+
+  <p>From my personal experience, using <a href="https://esphome.io/">ESPHome</a> with esp-idf results in quicker prototyping and
+  easier maintaining of devices out of the gate. Arduino just doesn't offer the groundwork
+  that ESPHome does out of the gate. Template based development also reduces the cost of
+  customization. ESPHome's HTTP interface directly offers debugging and visibility into the
+  device health. All these things make it easy to deploy and maintain.</p>
+
   <h2>Components</h2>
 
   <div class="component">
