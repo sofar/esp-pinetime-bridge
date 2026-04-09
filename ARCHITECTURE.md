@@ -50,11 +50,11 @@ esp-pinetime-bridge/
 │           ├── bridge_speaker.h          # Raw I2S speaker driver
 │           └── tones/                    # Generated PCM audio
 │               ├── event_tones.h         # Tone-to-event mapping
-│               ├── tone_positive.h/.raw  # Ascending chime
-│               ├── tone_warning.h/.raw   # Descending warning
-│               ├── tone_error.h/.raw     # Triple beep
-│               ├── tone_info.h/.raw      # Single ding
-│               └── tone_welcome.h/.raw   # Welcome jingle
+│               ├── tone_positive.h       # Ascending chime
+│               ├── tone_warning.h        # Descending warning
+│               ├── tone_error.h          # Triple beep
+│               ├── tone_info.h           # Single ding
+│               └── tone_welcome.h        # Welcome jingle
 ├── server/
 │   ├── main.go                       # Entry point, embedded web UI
 │   ├── go.mod / go.sum
@@ -88,11 +88,11 @@ esp-pinetime-bridge/
 | Git short ref in version string | Identify builds on watch |
 | Fix LFS debug macro | Build with GCC 15+ |
 
-### Reminder struct (40 bytes)
+### Reminder struct (72 bytes)
 
 ```cpp
 struct Reminder {
-  uint8_t version;      // format version (currently 2)
+  uint8_t version;      // format version (currently 3)
   uint8_t id;           // 0-9, assigned by bridge
   uint8_t hours;        // 0-23
   uint8_t minutes;      // 0-59
@@ -100,9 +100,9 @@ struct Reminder {
   uint8_t flags;        // bit 0: enabled, bits 1-2: priority (0-2)
   uint8_t month;        // 1-12 for specific date, 0 = not used
   uint8_t day;          // 1-31 for specific date, 0 = not used
-  char message[32];     // null-terminated UTF-8
+  char message[64];     // null-terminated UTF-8
 };
-// Max 10 reminders, 32-char messages (reduced from 56/64 for RAM)
+// Max 10 reminders, 64-char messages, heap-allocated (std::vector<Reminder>)
 ```
 
 ### Recurrence encoding
@@ -115,8 +115,9 @@ struct Reminder {
 
 ### RAM budget
 
-Stock InfiniTime 1.16.0 BSS: ~24,284 bytes. After changes: ~23,252 bytes.
+Stock InfiniTime 1.16.0 BSS: ~24,284 bytes. After changes: ~22,900 bytes.
 FreeRTOS heap (64KB - BSS): ~41KB available.
+Reminders use heap allocation (`std::vector<Reminder>`) — only active reminders consume RAM.
 
 Key constraints:
 - **SystemTask stack: 350 words (1400 bytes)** — too small for LittleFS write operations
@@ -137,11 +138,12 @@ Key constraints:
 
 | Characteristic | UUID suffix | Access | Payload |
 |---------------|-------------|--------|---------|
-| Upload Reminder | `0001` | Write | 40-byte `Reminder` struct |
+| Upload Reminder | `0001` | Write | 72-byte `Reminder` struct |
 | Delete Reminder | `0002` | Write | 1 byte: reminder ID (0xFF = delete all) |
-| List Reminders | `0003` | Read | 1 byte count + N × 40-byte structs |
+| List Reminders | `0003` | Read | 1 byte count + N × 72-byte structs |
 | Ack Notify | `0004` | Notify | 5 bytes: 1 byte ID + 4 bytes timestamp (LE) |
-| Sync All | `0005` | Write | 1 byte count + N × 40-byte structs |
+| Sync All | `0005` | Write | 1 byte count + N × 72-byte structs |
+| Status | `0006` | Read | 4 bytes: uptime in seconds (LE) |
 
 ### Quiet hours interaction
 
@@ -202,7 +204,7 @@ Battery warning repeats hourly between 8am-8pm while below 60%.
 
 ```
 RTTTL strings (tools/rtttl2pcm.py)
-  → 16kHz 16-bit mono PCM .raw + .h C arrays
+  → 16kHz 16-bit mono PCM .h C arrays
   → bridge_speaker.h: mono→stereo conversion + software volume scaling
   → Raw ESP-IDF I2S driver (MCLK×384, Philips, stereo)
   → ES8311 codec → PA (GPIO46) → Speaker
@@ -210,16 +212,16 @@ RTTTL strings (tools/rtttl2pcm.py)
 
 ESPHome's built-in `i2s_audio` speaker component does not work correctly with the ES8311 on this board (wrong MCLK multiple). The raw driver (`bridge_speaker.h`) uses `I2S_MCLK_MULTIPLE_384` matching the Waveshare reference implementation.
 
-### Connect-on-demand BLE
+### Persistent BLE connection
 
-1. Poll API every 60s (WiFi only, no BLE)
-2. Hash comparison — skip BLE if data unchanged
-3. Connect only when needed (data changed, notifications pending)
-4. Sync: discover services → time sync → delete-all → upload reminders → acks → disconnect
-5. Safety timeout: force-disconnect after 30s
+1. Bridge maintains a persistent BLE connection to the watch (auto-reconnect with 5s backoff)
+2. Poll API every 60s over WiFi
+3. Hash comparison — skip BLE sync if data unchanged
+4. When data changes: delete-all → upload reminders → acks (over existing connection)
+5. Periodic watch polling: battery, steps, uptime, time sync
 6. Post-DFU: 2-minute grace period before syncing reminders
-7. DFU characteristics skipped when no DFU active
-8. Watch polling every 30 minutes (battery, steps, time sync)
+7. DFU characteristics only discovered when DFU is active
+8. Safety timeout: 5-minute DFU timeout prevents stuck state
 
 ---
 
@@ -229,7 +231,7 @@ ESPHome's built-in `i2s_audio` speaker component does not work correctly with th
 
 ### Dependencies
 
-- **Go 1.22+** (uses `http.ServeMux` method routing)
+- **Go 1.22+** (uses `http.ServeMux` method routing, `http.Server` with timeouts)
 - **`modernc.org/sqlite`** — pure Go SQLite, no CGO required
 
 ### Database tables

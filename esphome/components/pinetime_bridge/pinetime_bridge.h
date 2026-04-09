@@ -13,7 +13,7 @@ namespace pinetime_bridge {
 
 // Must match the InfiniTime Reminder struct exactly (72 bytes)
 struct __attribute__((packed)) WatchReminder {
-  uint8_t version = 2;
+  uint8_t version = 3;
   uint8_t id = 0;           // 0-19
   uint8_t hours = 0;        // 0-23
   uint8_t minutes = 0;      // 0-59
