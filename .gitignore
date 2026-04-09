@@ -9,3 +9,4 @@ InfiniSim/
 __pycache__/
 *.pyc
 .*.swp
+spiNorFlash.raw
