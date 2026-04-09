@@ -1,4 +1,4 @@
 [submodule "InfiniTime"]
 	path = InfiniTime
-	url = /home/sofar/git/InfiniTime
-	branch = reminder-service
+	url = https://github.com/sofar/InfiniTime.git
+	branch = sofar/reminders
