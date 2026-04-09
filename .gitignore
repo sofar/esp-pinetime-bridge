@@ -1,4 +1,6 @@
 *.db
+*.db-shm
+*.db-wal
 esphome/secrets.yaml
 esphome/.esphome/
 server/pinetime-bridge-server
