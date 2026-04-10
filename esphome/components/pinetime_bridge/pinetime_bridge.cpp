@@ -1152,7 +1152,7 @@ void PineTimeBridge::sync_reminders_to_watch_() {
 
   ESP_LOGI(TAG, "[SYNC] Queued delete-all + %u individual reminder uploads", count);
   char logmsg[128];
-  snprintf(logmsg, sizeof(logmsg), "Syncing %u reminders to watch (individual writes)", count);
+  snprintf(logmsg, sizeof(logmsg), "Syncing %u reminders to watch", count);
   remote_log_("bridge", "info", logmsg);
 }
 
