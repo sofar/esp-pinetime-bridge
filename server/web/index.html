@@ -64,6 +64,11 @@
 
   /* Disabled / greyed out */
   .disabled-group { opacity: 0.35; pointer-events: none; }
+  .card-disabled {
+    background: repeating-linear-gradient(45deg, #f9f9f9, #f9f9f9 8px, #eee 8px, #eee 16px);
+    color: #999;
+  }
+  .card-disabled .msg { text-decoration: line-through; }
 
   /* Date fields */
   .date-fields { display: flex; gap: 8px; }
@@ -492,7 +497,7 @@ async function loadReminders() {
     return;
   }
   list.innerHTML = cachedReminders.map((r, idx) => `
-    <div class="card priority-${r.priority}" style="${r.enabled ? '' : 'opacity:0.5'}">
+    <div class="card priority-${r.priority} ${r.enabled ? '' : 'card-disabled'}">
       <div class="row">
         <div>
           <div class="msg">${esc(r.message || '(no message)')}</div>
