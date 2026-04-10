@@ -492,17 +492,17 @@ async function loadReminders() {
     return;
   }
   list.innerHTML = cachedReminders.map((r, idx) => `
-    <div class="card priority-${r.priority}">
+    <div class="card priority-${r.priority}" style="${r.enabled ? '' : 'opacity:0.5'}">
       <div class="row">
         <div>
           <div class="msg">${esc(r.message || '(no message)')}</div>
           <div class="meta">
             ${pad(r.hours)}:${pad(r.minutes)} &middot; ${describeRecurrence(r.recurrence, r.month||0, r.day||0)}
             &middot; ${priorityLabels[r.priority] || 'Medium'}
-            &middot; ${r.enabled ? 'Enabled' : 'Disabled'}
           </div>
         </div>
         <div class="actions">
+          <button class="btn btn-sm" style="background:${r.enabled ? '#8bc34a' : '#999'};color:#fff" onclick="toggleReminder(${idx})">${r.enabled ? 'On' : 'Off'}</button>
           <button class="btn btn-outline btn-sm" onclick="editReminderByIndex(${idx})">Edit</button>
           <button class="btn btn-danger btn-sm" onclick="deleteReminder(${r.reminder_id})">Del</button>
         </div>
@@ -680,6 +680,17 @@ async function deleteEditing() {
   if (!confirm('Delete this reminder?')) return;
   await fetch(API + '/api/users/' + currentUserId + '/reminders/' + editingReminderId, { method: 'DELETE' });
   clearForm();
+  loadReminders();
+}
+
+async function toggleReminder(idx) {
+  const r = cachedReminders[idx];
+  r.enabled = !r.enabled;
+  await fetch(API + '/api/users/' + currentUserId + '/reminders/' + r.reminder_id, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(r)
+  });
   loadReminders();
 }
 

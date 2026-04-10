@@ -1093,13 +1093,17 @@ void PineTimeBridge::poll_api_() {
 }
 
 void PineTimeBridge::sync_reminders_to_watch_() {
-  // Build sync packet to compute hash (even if not connected yet)
-  uint8_t count = static_cast<uint8_t>(std::min(api_reminders_.size(), (size_t)56));
+  // Filter to only enabled reminders for the watch
+  std::vector<ApiReminder> enabled;
+  for (const auto &r : api_reminders_) {
+    if (r.enabled) enabled.push_back(r);
+  }
+  uint8_t count = static_cast<uint8_t>(std::min(enabled.size(), (size_t)56));
   std::vector<uint8_t> data;
   data.push_back(count);
 
   for (uint8_t i = 0; i < count; i++) {
-    WatchReminder wr = api_reminders_[i].to_watch_reminder();
+    WatchReminder wr = enabled[i].to_watch_reminder();
     const uint8_t *bytes = reinterpret_cast<const uint8_t *>(&wr);
     data.insert(data.end(), bytes, bytes + sizeof(WatchReminder));
   }
@@ -1113,10 +1117,11 @@ void PineTimeBridge::sync_reminders_to_watch_() {
     ESP_LOGD(TAG, "[SYNC] Reminders unchanged (hash=0x%08x), no sync needed", hash);
     return;
   }
-  ESP_LOGI(TAG, "[SYNC] Reminders changed (hash 0x%08x -> 0x%08x), %u reminders:", last_sync_hash_, hash, count);
-  for (const auto &r : api_reminders_) {
-    ESP_LOGI(TAG, "[SYNC]   #%u %02u:%02u \"%s\" pri=%u recur=0x%02x en=%d",
-             r.reminder_id, r.hours, r.minutes, r.message.c_str(), r.priority, r.recurrence, r.enabled);
+  ESP_LOGI(TAG, "[SYNC] Reminders changed (hash 0x%08x -> 0x%08x), %u enabled of %u total:",
+           last_sync_hash_, hash, count, (unsigned)api_reminders_.size());
+  for (const auto &r : enabled) {
+    ESP_LOGI(TAG, "[SYNC]   #%u %02u:%02u \"%s\" pri=%u recur=0x%02x",
+             r.reminder_id, r.hours, r.minutes, r.message.c_str(), r.priority, r.recurrence);
   }
 
   // Only queue the BLE commands if we have handles (connected)
@@ -1135,9 +1140,9 @@ void PineTimeBridge::sync_reminders_to_watch_() {
     command_queue_.push(std::move(del_cmd));
   }
 
-  // Upload each reminder individually (72 bytes each, fits in MTU)
+  // Upload each enabled reminder individually (72 bytes each, fits in MTU)
   for (uint8_t i = 0; i < count; i++) {
-    WatchReminder wr = api_reminders_[i].to_watch_reminder();
+    WatchReminder wr = enabled[i].to_watch_reminder();
     BleCommand cmd;
     cmd.type = BleCommandType::WRITE_REMINDER;
     cmd.data.assign(reinterpret_cast<const uint8_t*>(&wr),
