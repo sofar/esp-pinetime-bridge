@@ -20,7 +20,7 @@ esphome:
             ESP_LOGI("boot", "Resetting touch/display via I/O expander (raw I2C)...");
             auto bus = id(i2c_bus);
             uint8_t buf[2];
-            // Set pins 0,1,2 as output (register 0x03, clear bits 0-2)
+            // Set pins 0,1,2 as output (register 0x03, clear bits 0-2). P3-P7 stay input (high-Z).
             buf[0] = 0x03; buf[1] = 0xF8;
             bus->write(0x20, buf, 2, true);
             // Pull pins 0,1,2 low (register 0x01)
@@ -36,10 +36,14 @@ esphome:
             ESP_LOGI("boot", "Reset sequence complete");
     - priority: 400
       then:
-        # Initialize raw I2S speaker (bypasses ESPHome speaker component)
+        # Start I2S peripheral (generates MCLK the codec needs to latch registers)
         - lambda: |-
             esphome::bridge_speaker::init();
             esphome::bridge_speaker::set_volume(id(saved_volume));
+        - delay: 20ms
+        # Initialize ES8311 codec via I2C (DAC power-up, I2S format, unmute)
+        - lambda: |-
+            esphome::bridge_speaker::init_codec(id(i2c_bus));
     - priority: 500
       then:
         - lambda: |-

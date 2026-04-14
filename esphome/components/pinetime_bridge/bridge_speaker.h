@@ -1,5 +1,6 @@
 #pragma once
 #include "esphome/core/log.h"
+#include "esphome/components/i2c/i2c.h"
 #include <driver/i2s_std.h>
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
@@ -11,6 +12,74 @@ namespace esphome {
 namespace bridge_speaker {
 
 static const char *const TAG = "bridge_speaker";
+
+// ES8311 codec init over I2C. Call AFTER the I2C bus is up and the I2S peripheral
+// is generating MCLK (post bridge_speaker::init()). 16kHz, 16-bit, I2S slave.
+static bool init_codec(esphome::i2c::I2CBus *bus, uint8_t addr = 0x18) {
+  auto w = [&](uint8_t reg, uint8_t val) {
+    uint8_t buf[2] = {reg, val};
+    return bus->write(addr, buf, 2, true) == esphome::i2c::ERROR_OK;
+  };
+
+  // Probe address — Waveshare board uses 0x18 (CE pin tied low). Fall back to 0x19.
+  uint8_t probe_reg = 0xFD, probe_val = 0;
+  if (bus->write(addr, &probe_reg, 1, false) != esphome::i2c::ERROR_OK ||
+      bus->read(addr, &probe_val, 1) != esphome::i2c::ERROR_OK) {
+    addr = 0x19;
+    if (bus->write(addr, &probe_reg, 1, false) != esphome::i2c::ERROR_OK ||
+        bus->read(addr, &probe_val, 1) != esphome::i2c::ERROR_OK) {
+      ESP_LOGE(TAG, "ES8311 not found at 0x18 or 0x19");
+      return false;
+    }
+  }
+  ESP_LOGI(TAG, "ES8311 found at 0x%02X (chip id reg 0xFD=0x%02X)", addr, probe_val);
+
+  // Standard Espressif ES8311 init: 16kHz, 16-bit, I2S slave, MCLK from pin, DAC unmuted.
+  bool ok = true;
+  ok &= w(0x00, 0x1F);  // reset
+  vTaskDelay(pdMS_TO_TICKS(10));
+  ok &= w(0x45, 0x00);
+  ok &= w(0x01, 0x30);  // clock manager: bclk_inv=0, mclk_src=MCLK pin
+  ok &= w(0x02, 0x00);  // clk div
+  ok &= w(0x03, 0x10);  // FS coeff
+  ok &= w(0x16, 0x24);  // ADC filter defaults
+  ok &= w(0x04, 0x10);  // DAC osr
+  ok &= w(0x05, 0x00);  // adc/dac clock divider
+  ok &= w(0x06, 0x03);  // sclk settings (64 sclk per frame)
+  ok &= w(0x07, 0x00);
+  ok &= w(0x08, 0xFF);
+  ok &= w(0x00, 0x80);  // power up, slave mode
+  ok &= w(0x0D, 0x01);
+  ok &= w(0x01, 0x3F);  // all clocks on
+  ok &= w(0x14, 0x1A);  // analog PGA 0dB
+  ok &= w(0x12, 0x00);  // ADC power
+  ok &= w(0x13, 0x10);
+  ok &= w(0x10, 0x1F);  // VMID ramp
+  ok &= w(0x11, 0x7F);  // analog power up
+  ok &= w(0x00, 0x80);  // stay powered, slave
+  ok &= w(0x0E, 0x02);
+  ok &= w(0x0F, 0x44);
+  ok &= w(0x15, 0x00);
+  ok &= w(0x1B, 0x0A);
+  ok &= w(0x1C, 0x6A);
+  ok &= w(0x37, 0x08);  // DAC ramp rate
+  ok &= w(0x44, 0x08);  // ADC→DAC loopback off
+  ok &= w(0x17, 0xBF);  // ADC vol (unused but standard)
+  // Format: 16-bit I2S
+  ok &= w(0x09, 0x0C);  // SDP in: 16-bit I2S
+  ok &= w(0x0A, 0x0C);  // SDP out: 16-bit I2S
+  // DAC output
+  ok &= w(0x32, 0xBF);  // DAC volume ≈ 0 dB
+  ok &= w(0x31, 0x00);  // DAC unmute
+  // GPIO reg — leave default; PA on this board is powered from PMIC, not codec GPIO.
+
+  if (!ok) {
+    ESP_LOGE(TAG, "ES8311 init had I2C write failures");
+    return false;
+  }
+  ESP_LOGI(TAG, "ES8311 codec initialized");
+  return true;
+}
 
 static i2s_chan_handle_t tx_handle_ = NULL;
 static SemaphoreHandle_t mutex_ = NULL;
@@ -56,7 +125,10 @@ static void init() {
 // Play mono 16-bit 16kHz PCM (converts to stereo for I2S)
 static void play_mono_pcm(const uint8_t *data, size_t len) {
   if (!ready_ || !data || len == 0) return;
-  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(200)) != pdTRUE) return;
+  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(200)) != pdTRUE) {
+    ESP_LOGW(TAG, "play skipped: mutex busy");
+    return;
+  }
 
   size_t num_samples = len / 2;
   int16_t *stereo = (int16_t *)heap_caps_malloc(num_samples * 4, MALLOC_CAP_DEFAULT);
@@ -75,7 +147,10 @@ static void play_mono_pcm(const uint8_t *data, size_t len) {
   }
 
   size_t bytes_written = 0;
-  i2s_channel_write(tx_handle_, stereo, num_samples * 4, &bytes_written, pdMS_TO_TICKS(2000));
+  esp_err_t err = i2s_channel_write(tx_handle_, stereo, num_samples * 4, &bytes_written, pdMS_TO_TICKS(2000));
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "i2s_write err=%d wrote=%u/%u", err, (unsigned)bytes_written, (unsigned)(num_samples * 4));
+  }
 
   free(stereo);
   xSemaphoreGive(mutex_);
@@ -92,7 +167,11 @@ static void play_task_(void *arg) {
 }
 
 static void play_event_tone(int tone_id) {
-  if (!ready_) return;
+  if (!ready_) {
+    ESP_LOGW(TAG, "play_event_tone(%d) ignored: not ready", tone_id);
+    return;
+  }
+  ESP_LOGI(TAG, "play_event_tone(%d)", tone_id);
   xTaskCreate(play_task_, "spk", 4096, (void *)(intptr_t)tone_id, 5, NULL);
 }
 

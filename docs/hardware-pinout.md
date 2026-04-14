@@ -40,7 +40,8 @@
 | I2S MCLK | GPIO16 |
 | I2C SDA | GPIO15 (shared) |
 | I2C SCL | GPIO14 (shared) |
-| Speaker PA Enable | GPIO46 |
+
+Note: Speaker amplifier is powered from the AXP2101 PMIC (rails enabled by default) and driven by the ES8311 codec itself — no ESP32 GPIO gates the PA. GPIO46 is a strapping pin with an external pull-down and is NOT the PA enable, despite appearing so in some earlier notes.
 
 ### I/O Expander (TCA9554 at I2C 0x20)
 | Pin | Function |
